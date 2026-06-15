@@ -1153,22 +1153,30 @@
       min-width: 160px;
     }
 
-    /* Keep fullscreen tip modal consistent with other info modals */
+    /* Make the iOS fullscreen tip modal larger and more readable */
     #fullscreenIosModal .modal-content {
-      width: min(92vw, 640px);
-      max-width: 92vw;
-      max-height: 85vh;
+      width: min(96vw, 760px);
+      max-width: 96vw;
+      max-height: 95vh;
+      padding: 24px 18px 20px;
       overflow-y: auto;
+    }
+
+    #fullscreenIosModal .rules-scroll {
+      padding: 0;
     }
 
     .fullscreen-tip-card { width: 100%; }
 
     .fullscreen-tip-image {
       width: 100%;
+      max-height: calc(95vh - 170px);
       height: auto;
       object-fit: contain;
       display: block;
-      border-radius: 12px;
+      border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow: 0 30px 70px rgba(0, 0, 0, 0.28);
     }
 
     .rules-scroll {
