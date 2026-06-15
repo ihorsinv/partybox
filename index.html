@@ -1404,6 +1404,7 @@
       from {
         opacity: 0;
       }
+
       to {
         opacity: 1;
       }
@@ -1414,6 +1415,7 @@
         transform: scale(0.92);
         opacity: 0;
       }
+
       to {
         transform: scale(1);
         opacity: 1;
@@ -2347,7 +2349,8 @@
 
   <div class="fullscreen-tooltip-overlay" id="fullscreenTooltipModal">
     <div class="fullscreen-tooltip-content">
-      <img src="images/Full_screen_tooltip.webp" alt="Як увімкнути повний екран на iOS" class="fullscreen-tooltip-image" />
+      <img src="images/Full_screen_tooltip.webp" alt="Як увімкнути повний екран на iOS"
+        class="fullscreen-tooltip-image" />
       <button class="fullscreen-tooltip-button" id="btn-close-tooltip">Зрозуміло</button>
     </div>
   </div>
@@ -2444,9 +2447,9 @@
         </div>
         <div class="mystery-actions">
           <div class="mystery-ready-wrap">
-          <button class="btn-primary" id="btn-myst-ready">Я ГОТОВИЙ</button>
-          <div class="hint-note hidden" id="myst-ready-hint">Спочатку оберіть карту, щоб розпочати гру.</div>
-        </div>
+            <button class="btn-primary" id="btn-myst-ready">Я ГОТОВИЙ</button>
+            <div class="hint-note hidden" id="myst-ready-hint">Спочатку оберіть карту, щоб розпочати гру.</div>
+          </div>
           <button class="btn-ghost hidden" id="btn-myst-end-turn">Завершити хід</button>
           <button class="btn-danger btn-primary hidden" id="btn-myst-accuse">ЗВИНУВАТИ</button>
           <button class="btn-ghost"
@@ -2492,7 +2495,8 @@
   <div class="modal-overlay" id="replayRequestModal">
     <div class="modal-content glass" style="text-align: center;">
       <div class="modal-title" id="replay-request-title">Суперник хоче зіграти ще раз</div>
-      <div style="color: var(--text-muted); margin-bottom: 28px; font-size: 0.95rem;" id="replay-request-desc">Почати нову роздачу в цій кімнаті?</div>
+      <div style="color: var(--text-muted); margin-bottom: 28px; font-size: 0.95rem;" id="replay-request-desc">Почати
+        нову роздачу в цій кімнаті?</div>
       <div style="display: flex; gap: 12px; justify-content: center;">
         <button class="btn-ghost" id="btn-replay-decline">Відхилити</button>
         <button class="btn-primary btn-danger" id="btn-replay-accept">Прийняти</button>
@@ -2517,11 +2521,25 @@
 
   <script>
     const AppConfig = {
+      // Розміри та кількості
       SECRET_GRID_SIZE: 16,
       ROOM_CODE_LENGTH: 6,
       SPIES_PER_PLAYERS: 3,
       MAX_PLAYERS_SPY: 12,
-      MAX_ROOM_CODE_ATTEMPTS: 5
+      MIN_PLAYERS_SPY: 2,
+      MAX_ROOM_CODE_ATTEMPTS: 5,
+      MAX_HISTORY_SIZE: 30,
+
+      // Часові затримки (мс)
+      TOAST_DURATION_MS: 2500,
+      RESULT_SCREEN_DELAY_MS: 2500,
+      ACCUSE_ANIMATION_DELAY_MS: 1500,
+      MODAL_ANIMATION_DURATION_MS: 300,
+      NETWORK_TIMEOUT_MS: 10000,
+
+      // UI
+      CARD_PLACEHOLDER_SIZE_PX: 180,
+      MODAL_MAX_WIDTH_PX: 400
     };
 
     const AppText = {
@@ -3074,11 +3092,555 @@
       }
     }
 
+    /**
+     * UIManager - Централізоване управління DOM елементами та UI операціями
+     * Усуває дублювання DOM запитів та управляє подіями з автоочищенням
+     */
+    class UIManager {
+      constructor() {
+        /** Кеш DOM елементів */
+        this.cache = {};
+        /** Прив'язані обробники для очищення */
+        this.handlers = new Map();
+      }
+
+      /**
+       * Отримати елемент з кешу або DOM
+       * @param {string} id - ID елемента
+       * @returns {HTMLElement|null}
+       */
+      getElement(id) {
+        if (!this.cache[id]) {
+          const el = document.getElementById(id);
+          if (el) this.cache[id] = el;
+        }
+        return this.cache[id] || null;
+      }
+
+      /**
+       * Отримати елемент або виправити помилку
+       * @param {string} id - ID елемента
+       * @returns {HTMLElement}
+       * @throws {Error} якщо елемент не знайдено
+       */
+      getElementRequired(id) {
+        const el = this.getElement(id);
+        if (!el) throw new Error(`Element not found: ${id}`);
+        return el;
+      }
+
+      /**
+       * Показати екран (лише один активний)
+       * @param {string} screenId - ID екрана для показу
+       */
+      showScreen(screenId) {
+        document.querySelectorAll('.screen').forEach(s =>
+          s.classList.remove('active')
+        );
+        const screen = this.getElement(screenId);
+        if (screen) screen.classList.add('active');
+      }
+
+      /**
+       * Показати/сховати модальне вікно
+       * @param {string} modalId - ID модалі
+       * @param {boolean} visible - true = показати, false = сховати
+       */
+      setModalVisible(modalId, visible) {
+        const modal = this.getElement(modalId);
+        if (!modal) return;
+        visible ? modal.classList.add('active') : modal.classList.remove('active');
+      }
+
+      /**
+       * Оновити текстовий вміст елемента
+       * @param {string} id - ID елемента
+       * @param {string} text - Новий текст
+       */
+      setText(id, text) {
+        const el = this.getElement(id);
+        if (el) el.textContent = text;
+      }
+
+      /**
+       * Оновити HTML вміст елемента (небезпечно! тільки для надійних даних)
+       * @param {string} id - ID елемента
+       * @param {string} html - Новий HTML
+       */
+      setHTML(id, html) {
+        const el = this.getElement(id);
+        if (el) el.innerHTML = html;
+      }
+
+      /**
+       * Управління видимістю елемента через клас hidden
+       * @param {string|HTMLElement} target - ID або елемент
+       * @param {boolean} visible - true = показати, false = сховати
+       */
+      setVisible(target, visible) {
+        let el;
+        if (typeof target === 'string') {
+          el = this.getElement(target);
+        } else {
+          el = target;
+        }
+        if (!el) return;
+        visible ? el.classList.remove('hidden') : el.classList.add('hidden');
+      }
+
+      /**
+       * Керування класами елемента
+       * @param {string} id - ID елемента
+       * @param {string} className - Ім'я класу
+       * @param {boolean} add - true = додати, false = видалити
+       */
+      toggleClass(id, className, add) {
+        const el = this.getElement(id);
+        if (!el) return;
+        add ? el.classList.add(className) : el.classList.remove(className);
+      }
+
+      /**
+       * Прикріпити обробник до елемента з відслідкуванням для очищення
+       * @param {string} id - ID елемента
+       * @param {string} event - Тип події (click, change, input...)
+       * @param {Function} handler - Обробник
+       * @returns {Function} Функція для видалення слухача
+       */
+      attachListener(id, event, handler) {
+        const el = this.getElement(id);
+        if (!el) return () => { };
+
+        const key = `${id}:${event}`;
+        const wrappedHandler = handler.bind(this);
+
+        el.addEventListener(event, wrappedHandler);
+
+        // Зберегти для очищення
+        if (!this.handlers.has(key)) {
+          this.handlers.set(key, []);
+        }
+        this.handlers.get(key).push({ el, event, wrappedHandler });
+
+        // Повернути функцію для видалення
+        return () => {
+          el.removeEventListener(event, wrappedHandler);
+        };
+      }
+
+      /**
+       * Прикріпити обробник Event Delegation до контейнера
+       * @param {string} containerId - ID контейнера
+       * @param {string} selector - Селектор для виявлення цілей
+       * @param {string} event - Тип події
+       * @param {Function} handler - Обробник(event, targetElement)
+       * @returns {Function} Функція для видалення слухача
+       */
+      attachDelegatedListener(containerId, selector, event, handler) {
+        const container = this.getElement(containerId);
+        if (!container) return () => { };
+
+        const delegatedHandler = (e) => {
+          const target = e.target.closest(selector);
+          if (target) handler(e, target);
+        };
+
+        container.addEventListener(event, delegatedHandler);
+
+        const key = `${containerId}:delegated:${event}`;
+        if (!this.handlers.has(key)) {
+          this.handlers.set(key, []);
+        }
+        this.handlers.get(key).push({ el: container, event, handler: delegatedHandler });
+
+        return () => container.removeEventListener(event, delegatedHandler);
+      }
+
+      /**
+       * Очистити всі прикріплені обробники (для переходу між екранами)
+       */
+      cleanup() {
+        this.handlers.forEach(handlerList => {
+          handlerList.forEach(({ el, event, handler }) => {
+            el.removeEventListener(event, handler);
+          });
+        });
+        this.handlers.clear();
+      }
+
+      /**
+       * Показати toast повідомлення
+       * @param {string} message - Текст повідомлення
+       * @param {number} durationMs - Тривалість показу (мс)
+       */
+      showToast(message, durationMs = 2500) {
+        const toastEl = this.getElement('toast');
+        if (!toastEl) return;
+
+        toastEl.textContent = message;
+        toastEl.classList.add('show');
+
+        setTimeout(() => {
+          toastEl.classList.remove('show');
+        }, durationMs);
+      }
+
+      /**
+       * Активувати кнопку з текстом
+       * @param {string} id - ID кнопки
+       * @param {boolean} enabled - true = активна, false = інертна
+       * @param {string} text - Опціональний текст
+       */
+      setButtonState(id, enabled, text = null) {
+        const btn = this.getElement(id);
+        if (!btn) return;
+        btn.disabled = !enabled;
+        if (text) btn.textContent = text;
+      }
+
+      /**
+       * Закрити всі модальні вікна
+       */
+      closeAllModals() {
+        document.querySelectorAll('.modal-overlay.active').forEach(el =>
+          el.classList.remove('active')
+        );
+        document.querySelectorAll('.orientation-tip-overlay:not(.dismissed)').forEach(el =>
+          el.classList.add('dismissed')
+        );
+      }
+
+      /**
+       * Отримати значення з текстового поля
+       * @param {string} id - ID поля
+       * @returns {string} Значення поля
+       */
+      getInputValue(id) {
+        const input = this.getElement(id);
+        return input ? input.value : '';
+      }
+
+      /**
+       * Встановити значення текстового поля
+       * @param {string} id - ID поля
+       * @param {string} value - Нове значення
+       */
+      setInputValue(id, value) {
+        const input = this.getElement(id);
+        if (input) input.value = value;
+      }
+
+      /**
+       * Очистити кеш (коли повторно ініціалізується сторінка)
+       */
+      invalidateCache() {
+        this.cache = {};
+      }
+    }
+
+    /**
+     * StateManager - Керує станом гри з реактивністю
+     * Об'єднує state та secretState в одну структуру
+     */
+    class StateManager {
+      constructor() {
+        this.state = {
+          gameType: null,      // 'spy' або 'secret'
+
+          // Для spy mode
+          spy: {
+            playerCount: 5,
+            currentPlayer: 0,
+            selectedCats: new Set(),
+            spySet: new Set(),
+            chosenChar: null,
+            cardOpen: false
+          },
+
+          // Для secret mode
+          secret: {
+            role: null,         // 'host', 'guest', або null
+            roomCode: null,
+            grid: [],
+            mySelected: null,
+            opponentSelection: null,
+            myEliminated: new Set(),
+            pendingEliminated: new Set(),
+            isMyTurn: false,
+            gameActive: false,
+            stage: 'lobby',     // 'lobby', 'selection', 'playing', 'result'
+            myReady: false,
+            opponentReady: false,
+            accuseMode: false,
+            status: 'selection',
+            currentTurn: 'host',
+            winner: null,
+            resultShown: false,
+            gridBuilt: false,
+            selectedCats: new Set()
+          }
+        };
+
+        /** Слухачі змін стану */
+        this.listeners = new Map();
+      }
+
+      /**
+       * Отримати текущий стан
+       * @param {string} gameType - 'spy' або 'secret'
+       * @returns {Object} Об'єкт стану
+       */
+      getGameState(gameType = this.state.gameType) {
+        return gameType === 'spy' ? this.state.spy : this.state.secret;
+      }
+
+      /**
+       * Встановити значення в стані з нотифікацією слухачів
+       * @param {string} gameType - 'spy' або 'secret'
+       * @param {string} key - Ключ властивості
+       * @param {*} value - Нове значення
+       */
+      setState(gameType, key, value) {
+        const gameState = this.getGameState(gameType);
+        if (gameState[key] !== value) {
+          gameState[key] = value;
+          this.notifyListeners(gameType, key, value);
+        }
+      }
+
+      /**
+       * Встановити множинне значення в стані
+       * @param {string} gameType - 'spy' або 'secret'
+       * @param {Object} updates - Об'єкт з оновленнями
+       */
+      setStateMultiple(gameType, updates) {
+        const gameState = this.getGameState(gameType);
+        Object.entries(updates).forEach(([key, value]) => {
+          if (gameState[key] !== value) {
+            gameState[key] = value;
+            this.notifyListeners(gameType, key, value);
+          }
+        });
+      }
+
+      /**
+       * Підписатися на зміни стану
+       * @param {string} gameType - 'spy' або 'secret'
+       * @param {string} key - Ключ для спостереження
+       * @param {Function} callback - Функція(oldValue, newValue)
+       * @returns {Function} Функція для відписки
+       */
+      subscribe(gameType, key, callback) {
+        const listenerKey = `${gameType}:${key}`;
+        if (!this.listeners.has(listenerKey)) {
+          this.listeners.set(listenerKey, []);
+        }
+        this.listeners.get(listenerKey).push(callback);
+
+        // Повернути функцію для відписки
+        return () => {
+          const listeners = this.listeners.get(listenerKey);
+          const index = listeners.indexOf(callback);
+          if (index > -1) listeners.splice(index, 1);
+        };
+      }
+
+      /**
+       * Нотифікувати всіх слухачів про зміну
+       * @private
+       */
+      notifyListeners(gameType, key, value) {
+        const listenerKey = `${gameType}:${key}`;
+        const callbacks = this.listeners.get(listenerKey) || [];
+        callbacks.forEach(callback => {
+          try {
+            callback(value);
+          } catch (error) {
+            console.error(`StateManager listener error for ${listenerKey}:`, error);
+          }
+        });
+      }
+
+      /**
+       * Відчистити весь стан (нова гра)
+       * @param {string} gameType - 'spy' або 'secret'
+       */
+      reset(gameType) {
+        if (gameType === 'spy') {
+          this.state.spy = {
+            playerCount: 5,
+            currentPlayer: 0,
+            selectedCats: new Set(),
+            spySet: new Set(),
+            chosenChar: null,
+            cardOpen: false
+          };
+        } else {
+          this.state.secret = {
+            role: null,
+            roomCode: null,
+            grid: [],
+            mySelected: null,
+            opponentSelection: null,
+            myEliminated: new Set(),
+            pendingEliminated: new Set(),
+            isMyTurn: false,
+            gameActive: false,
+            stage: 'lobby',
+            myReady: false,
+            opponentReady: false,
+            accuseMode: false,
+            status: 'selection',
+            currentTurn: 'host',
+            winner: null,
+            resultShown: false,
+            gridBuilt: false,
+            selectedCats: new Set()
+          };
+        }
+      }
+    }
+
+    /**
+     * GameEngine - Ізольована логіка гри, відокремлена від UI та мережі
+     * Містить чистофункціональні операції для обох режимів гри
+     */
+    class GameEngine {
+      constructor(appConfig = AppConfig) {
+        this.config = appConfig;
+        this.crypto = CryptoRandomizer;
+      }
+
+      /**
+       * Обчислити кількість шпигунів за кількістю гравців
+       * @param {number} playerCount - Кількість гравців
+       * @returns {number} Кількість шпигунів
+       */
+      calculateSpyCount(playerCount) {
+        return Math.max(1, Math.floor(playerCount / this.config.SPIES_PER_PLAYERS));
+      }
+
+      /**
+       * Вибрати випадкових гравців у ролі шпигунів
+       * @param {number} playerCount - Кількість гравців
+       * @returns {Set} Індекси шпигунів
+       */
+      selectSpies(playerCount) {
+        const spyCount = this.calculateSpyCount(playerCount);
+        const spies = new Set();
+
+        while (spies.size < spyCount) {
+          spies.add(this.crypto.secureRandomInt(playerCount));
+        }
+
+        return spies;
+      }
+
+      /**
+       * Вибрати персонажа з категорій
+       * @param {Array<Object>} categories - Список категорій з символами
+       * @param {Set} excludeRecent - Набір недавно використаних персонажів (опціонально)
+       * @returns {Object} Обраний персонаж
+       */
+      selectCharacter(categories, excludeRecent = new Set()) {
+        const pool = [];
+
+        categories.forEach(cat => {
+          cat.chars.forEach(char => {
+            if (!excludeRecent.has(char.name)) {
+              pool.push(char);
+            }
+          });
+        });
+
+        if (pool.length === 0) {
+          // Fallback: вибрати з усіх символів
+          categories.forEach(cat => pool.push(...cat.chars));
+        }
+
+        const idx = this.crypto.secureRandomInt(pool.length);
+        return pool[idx];
+      }
+
+      /**
+       * Підтримати гру - вибрати категорії та нарахувати персонажів
+       * @param {Set} selectedCatIds - ID вибраних категорій
+       * @param {number} gridSize - Розмір сітки для таємниці
+       * @returns {Array} Список персонажів
+       */
+      buildGameGrid(selectedCatIds, gridSize = 16) {
+        const selectedCats = AppCategories.filter(cat => selectedCatIds.has(cat.id));
+
+        if (selectedCats.length === 0) {
+          throw new Error('No categories selected');
+        }
+
+        return this._buildDiverseGrid(selectedCats, gridSize);
+      }
+
+      /**
+       * Побудувати сітку з рівномірним розподіленням категорій
+       * @private
+       */
+      _buildDiverseGrid(categories, gridSize) {
+        const grid = [];
+        const enabledCats = categories.filter(c => c.chars.length > 0);
+        const targetPerCategory = Math.floor(gridSize / enabledCats.length);
+        const remainder = gridSize % enabledCats.length;
+
+        enabledCats.forEach((cat, idx) => {
+          const count = targetPerCategory + (idx < remainder ? 1 : 0);
+          const chars = this.crypto.secureShuffle(cat.chars).slice(0, count);
+          grid.push(...chars);
+        });
+
+        return this.crypto.secureShuffle(grid).slice(0, gridSize);
+      }
+
+      /**
+       * Перевірити результат гри "таємниця" - чи вгадав персонажа
+       * @param {Object} myChoice - Мій вибір персонажа
+       * @param {Object} opponentChoice - Вибір супротивника
+       * @returns {Object} {won: boolean, reason: 'correct'|'wrong'|'surrender'}
+       */
+      checkSecretGameResult(myChoice, opponentChoice) {
+        if (!myChoice || !opponentChoice) {
+          return { won: false, reason: 'incomplete' };
+        }
+
+        const correct = myChoice.name === opponentChoice.name;
+        return {
+          won: correct,
+          reason: correct ? 'correct' : 'wrong'
+        };
+      }
+
+      /**
+       * Валідувати код кімнати
+       * @param {string} code - Код для перевірки
+       * @returns {boolean} true якщо валідний
+       */
+      validateRoomCode(code) {
+        if (!code || typeof code !== 'string') return false;
+        return code.length === this.config.ROOM_CODE_LENGTH && /^\d+$/.test(code);
+      }
+
+      /**
+       * Генерувати випадковий код кімнати
+       * @returns {string} Код з цифр
+       */
+      generateRoomCode() {
+        const min = Math.pow(10, this.config.ROOM_CODE_LENGTH - 1);
+        const max = Math.pow(10, this.config.ROOM_CODE_LENGTH) - 1;
+        return String(this.crypto.secureRandomRange(min, max));
+      }
+    }
+
     class NetworkManager {
       constructor() {
         this._roomRef = null;
         this._stateListener = false;
-        this._listeners = new Map();
+        this._guestListenerActive = false;
       }
 
       async createRoom(code, grid, startingRole = 'host') {
@@ -3124,11 +3686,17 @@
       }
 
       listenForGuest(onConnected) {
-        if (!this._roomRef) return;
+        if (!this._roomRef || this._guestListenerActive) return;
+        this._guestListenerActive = true;
         const guestRef = this._roomRef.child('guestOnline');
         guestRef.off('value');
-        guestRef.on('value', snap => { if (snap.val() === true) onConnected(); });
-        guestRef.once('value').then(snap => { if (snap.val() === true) onConnected(); }).catch(() => { });
+        let hasTriggered = false;
+        guestRef.on('value', snap => {
+          if (snap.val() === true && !hasTriggered) {
+            hasTriggered = true;
+            onConnected();
+          }
+        });
       }
 
       listenForDisconnect(callback, role) {
@@ -3224,9 +3792,13 @@
     class CryptoRandomizer {
       static secureRandomInt(max) {
         if (max <= 0) return 0;
+        if (max === 1) return 0;
         if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
           const buf = new Uint32Array(1);
-          crypto.getRandomValues(buf);
+          const LIMIT = Math.floor(0x100000000 / max) * max;
+          do {
+            crypto.getRandomValues(buf);
+          } while (buf[0] >= LIMIT);
           return buf[0] % max;
         }
         return Math.floor(Math.random() * max);
@@ -3247,8 +3819,13 @@
       }
     }
 
+    /**
+     * PartyBoxApp - Головний контролер застосунку
+     * Координує UI, стан, мережу та логіку гри
+     */
     class PartyBoxApp {
       constructor() {
+        // Ініціалізувати Firebase
         firebase.initializeApp({
           apiKey: "AIzaSyBXHJoDHeh55JhCmfJgYjWyN--BZVzlM5s",
           authDomain: "partybox1303.firebaseapp.com",
@@ -3260,25 +3837,39 @@
           measurementId: "G-F35L57EYZP"
         });
 
+        // Ініціалізувати системні компоненти
+        this.ui = new UIManager();
+        this.stateManager = new StateManager();
+        this.engine = new GameEngine();
         this.network = new NetworkManager();
         this.gameHistory = new GameHistory();
-        this.state = {
-          playerCount: 5, selectedCats: new Set(), currentPlayer: 0,
-          spySet: new Set(), chosenChar: null, cardOpen: false
-        };
-        this.secretState = {
-          role: null, roomCode: null, grid: [], mySelected: null, opponentSelection: null,
-          myEliminated: new Set(), pendingEliminated: new Set(), isMyTurn: false, gameActive: false, stage: 'lobby',
-          myReady: false, opponentReady: false, accuseMode: false, status: 'selection',
-          currentTurn: 'host', winner: null, resultShown: false, gridBuilt: false,
-          selectedCats: new Set()
-        };
-        this.currentGame = null;
-        this.toastTimer = null;
-        this.pendingAccuseIndex = null;
-        this.categoriesInitialized = new Set(); // Відслідкування ініціалізованих контейнерів
 
+        // Легаси для обратної сумісності (з часом видалити)
+        // Ці об'єкти використовуються старим кодом
+        Object.defineProperty(this, 'state', {
+          get: () => this.stateManager.getGameState('spy'),
+          set: (val) => Object.assign(this.stateManager.state.spy, val)
+        });
+        Object.defineProperty(this, 'secretState', {
+          get: () => this.stateManager.getGameState('secret'),
+          set: (val) => Object.assign(this.stateManager.state.secret, val)
+        });
+
+        // Локальні властивості
+        this.currentGame = null;
+        this.pendingAccuseIndex = null;
+        this.categoriesInitialized = new Set();
+
+        // Запустити ініціалізацію
         this.init();
+      }
+
+      /**
+       * Отримати елемент (делегація до UIManager)
+       * @deprecated Використовувати this.ui.getElement() замість цього
+       */
+      getElement(id) {
+        return this.ui.getElement(id);
       }
 
       init() {
@@ -3306,33 +3897,66 @@
       }
 
       switchScreen(id) {
-        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-        document.getElementById(id).classList.add('active');
+        this.ui.showScreen(id);
         this.updateStaticTexts();
       }
 
-      showToast(msg) {
-        const t = document.getElementById('toast');
-        t.textContent = msg; t.classList.add('show');
-        clearTimeout(this.toastTimer);
-        this.toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+      // Утилітарні методи для управління UI
+      updateText(elementId, text) {
+        const el = this.getElement(elementId) || document.getElementById(elementId);
+        if (el) el.textContent = text;
       }
 
-      openModal(id) { document.getElementById(id).classList.add('active'); }
-      closeModal(id) { document.getElementById(id).classList.remove('active'); }
+      updateHTML(elementId, html) {
+        const el = this.getElement(elementId) || document.getElementById(elementId);
+        if (el) el.innerHTML = html;
+      }
+
+      toggleClass(elementId, className, condition) {
+        const el = this.getElement(elementId) || document.getElementById(elementId);
+        if (!el) return;
+        condition ? el.classList.add(className) : el.classList.remove(className);
+      }
+
+      setButtonState(elementId, enabled, text = null) {
+        const btn = this.getElement(elementId) || document.getElementById(elementId);
+        if (!btn) return;
+        btn.disabled = !enabled;
+        if (text) btn.textContent = text;
+      }
+
+      /**
+       * Показати toast повідомлення
+       * @param {string} msg - Текст повідомлення
+       */
+      showToast(msg) {
+        this.ui.showToast(msg, AppConfig.TOAST_DURATION_MS || 2500);
+      }
+
+      openModal(id) {
+        this.ui.setModalVisible(id, true);
+      }
+
+      closeModal(id) {
+        this.ui.setModalVisible(id, false);
+      }
+
       closeAllModals() {
-        document.querySelectorAll('.modal-overlay.active').forEach(el => el.classList.remove('active'));
-        document.querySelectorAll('.orientation-tip-overlay:not(.dismissed)').forEach(el => el.classList.add('dismissed'));
+        this.ui.closeAllModals();
         this.dismissPortraitTip();
       }
 
       setVisible(target, visible) {
-        const el = typeof target === 'string' ? document.getElementById(target) : target;
-        if (!el) return;
-        visible ? el.classList.remove('hidden') : el.classList.add('hidden');
+        this.ui.setVisible(target, visible);
       }
-      show = (t) => this.setVisible(t, true);
-      hide = (t) => this.setVisible(t, false);
+
+      show(t) {
+        this.ui.setVisible(t, true);
+      }
+
+      hide(t) {
+        this.ui.setVisible(t, false);
+      }
 
       dismissPortraitTip() {
         const tip = document.getElementById('portrait-tip');
@@ -3400,7 +4024,7 @@
       }
 
       initCategories(containerId, selectedSet, onToggle) {
-        const container = document.getElementById(containerId);
+        const container = this.getElement(containerId) || document.getElementById(containerId);
         if (!container || this.categoriesInitialized.has(containerId)) return;
 
         container.innerHTML = '';
@@ -3410,7 +4034,7 @@
           const active = selectedSet.has(cat.id);
           const el = document.createElement('div');
           el.className = 'cat-toggle' + (active ? ' active' : '');
-          el.dataset.id = cat.id; // Додаємо data-id для Event Delegation
+          el.dataset.id = cat.id;
           el.innerHTML = `<div class="ct-icon">${cat.icon}</div><div style="flex:1;"><div class="ct-name">${cat.name}</div><div class="ct-count">${cat.chars.length} персонажів</div></div><div class="ct-check">${active ? '✓' : ''}</div>`;
           container.appendChild(el);
         });
@@ -3419,7 +4043,7 @@
       }
 
       updateCategoriesUI(containerId, selectedSet) {
-        const container = document.getElementById(containerId);
+        const container = this.getElement(containerId) || document.getElementById(containerId);
         if (!container) return;
 
         if (!selectedSet || typeof selectedSet.has !== 'function') selectedSet = new Set();
@@ -3438,16 +4062,14 @@
       }
 
       setupCategoriesEventDelegation(containerId, selectedSet, onToggle) {
-        const container = document.getElementById(containerId);
+        const container = this.getElement(containerId) || document.getElementById(containerId);
         if (!container) return;
 
-        // Видаляємо старий слушач якщо він існує
         const oldHandler = container._categoryDelegationHandler;
         if (oldHandler) {
           container.removeEventListener('click', oldHandler);
         }
 
-        // Додаємо новий слушач з Event Delegation
         const handler = (e) => {
           const toggle = e.target.closest('.cat-toggle');
           if (toggle) {
@@ -3479,11 +4101,15 @@
         this.updateStaticTexts();
       }
 
+      /**
+       * Змінити кількість гравців
+       * @param {number} delta - Зміна (додати/відняти)
+       */
       changeCount(delta) {
         const next = this.state.playerCount + delta;
-        if (next < AppConfig.SPIES_PER_PLAYERS || next > AppConfig.MAX_PLAYERS_SPY) return;
+        if (next < AppConfig.MIN_PLAYERS_SPY || next > AppConfig.MAX_PLAYERS_SPY) return;
         this.state.playerCount = next;
-        document.getElementById('player-count').textContent = next;
+        this.ui.setText('player-count', String(next));
         this.updateStaticTexts();
       }
 
@@ -3727,25 +4353,24 @@
         const selectedCharacters = [];
         const usedCharIds = new Set();
         const recentChars = this.gameHistory.getRecentCharacters(Math.ceil(AppConfig.SECRET_GRID_SIZE * 0.2));
+        const enabledCategories = AppCategories.filter(cat => this.secretState.selectedCats.has(cat.id));
+        const targetPerCategory = Math.floor(AppConfig.SECRET_GRID_SIZE / enabledCategories.length);
+        const remainder = AppConfig.SECRET_GRID_SIZE % enabledCategories.length;
+        let charIndex = 0;
 
-        for (const cat of AppCategories) {
-          if (!this.secretState.selectedCats.has(cat.id)) continue;
-
+        for (let catIdx = 0; catIdx < enabledCategories.length; catIdx++) {
+          const cat = enabledCategories[catIdx];
           const categoryChars = cat.chars.filter(char => !usedCharIds.has(char.name));
-
           if (categoryChars.length === 0) continue;
 
           const nonRecentChars = categoryChars.filter(char => !recentChars.includes(char.name));
           const poolToUse = nonRecentChars.length > 0 ? nonRecentChars : categoryChars;
-
           const shuffledCat = CryptoRandomizer.secureShuffle(poolToUse);
+          const countForThisCategory = targetPerCategory + (catIdx < remainder ? 1 : 0);
           const available = AppConfig.SECRET_GRID_SIZE - selectedCharacters.length;
-          const charCountFromCategory = Math.min(
-            Math.max(1, Math.floor(available / (AppCategories.filter(c => this.secretState.selectedCats.has(c.id)).length - AppCategories.indexOf(cat)))),
-            shuffledCat.length
-          );
+          const toAdd = Math.min(countForThisCategory, available, shuffledCat.length);
 
-          for (let i = 0; i < charCountFromCategory && selectedCharacters.length < AppConfig.SECRET_GRID_SIZE; i++) {
+          for (let i = 0; i < toAdd; i++) {
             selectedCharacters.push(shuffledCat[i]);
             usedCharIds.add(shuffledCat[i].name);
           }
@@ -3753,12 +4378,9 @@
 
         if (selectedCharacters.length < AppConfig.SECRET_GRID_SIZE) {
           const allChars = [];
-          AppCategories.forEach(cat => {
-            if (this.secretState.selectedCats.has(cat.id)) {
-              allChars.push(...cat.chars.filter(ch => !usedCharIds.has(ch.name)));
-            }
+          enabledCategories.forEach(cat => {
+            allChars.push(...cat.chars.filter(ch => !usedCharIds.has(ch.name)));
           });
-
           const shuffledRemaining = CryptoRandomizer.secureShuffle(allChars);
           for (const char of shuffledRemaining) {
             if (selectedCharacters.length >= AppConfig.SECRET_GRID_SIZE) break;
@@ -3866,7 +4488,7 @@
           if (this.secretState.gracefulEnding) return;
           this.showToast('З\'єднання з суперником перервано 💔');
           this.secretState.gameActive = false;
-          setTimeout(async () => { await this.backToMenu(); }, 2500);
+          setTimeout(async () => { await this.backToMenu(); }, AppConfig.RESULT_SCREEN_DELAY_MS);
         }, this.secretState.role);
         document.getElementById('orientation-tip').classList.remove('dismissed');
         this.hide('mystery-my-char-wrap');
@@ -3881,7 +4503,7 @@
           if (this.secretState.gameActive) {
             this.showToast('Кімната закрита або втрачено з\'єднання.');
             this.secretState.gameActive = false;
-            setTimeout(async () => { await this.backToMenu(); }, 2500);
+            setTimeout(async () => { await this.backToMenu(); }, AppConfig.RESULT_SCREEN_DELAY_MS);
           }
           return;
         }
@@ -3958,7 +4580,8 @@
       }
 
       initSecretGrid() {
-        const gridEl = document.getElementById('cards-grid');
+        const gridEl = this.getElement('cards-grid') || document.getElementById('cards-grid');
+        if (!gridEl) return;
         gridEl.innerHTML = '';
         this.secretState.grid.forEach((char, idx) => {
           const cell = document.createElement('div');
@@ -3997,37 +4620,50 @@
           cell.classList.toggle('locked', this.secretState.stage === 'playing' && !this.secretState.isMyTurn);
           cell.classList.toggle('accuse-target', this.secretState.accuseMode);
         }
-        const readyBtn = document.getElementById('btn-myst-ready');
-        const endBtn = document.getElementById('btn-myst-end-turn');
-        const accBtn = document.getElementById('btn-myst-accuse');
-        const turnInd = document.getElementById('turn-indicator');
+        const readyBtn = this.getElement('btn-myst-ready') || document.getElementById('btn-myst-ready');
+        const endBtn = this.getElement('btn-myst-end-turn') || document.getElementById('btn-myst-end-turn');
+        const accBtn = this.getElement('btn-myst-accuse') || document.getElementById('btn-myst-accuse');
+        const turnInd = this.getElement('turn-indicator') || document.getElementById('turn-indicator');
         if (this.secretState.stage === 'lobby') {
-          this.hide(readyBtn); this.hide(endBtn); this.hide(accBtn);
-          turnInd.textContent = this.secretState.role === 'guest' ? 'Очікування початку гри хостом...' : 'Очікування підключення суперника...';
-          turnInd.className = 'turn-indicator blink';
+          if (readyBtn) this.hide(readyBtn);
+          if (endBtn) this.hide(endBtn);
+          if (accBtn) this.hide(accBtn);
+          if (turnInd) turnInd.textContent = this.secretState.role === 'guest' ? 'Очікування початку гри хостом...' : 'Очікування підключення суперника...';
+          if (turnInd) turnInd.className = 'turn-indicator blink';
         } else if (this.secretState.stage === 'selection') {
-          this.show(readyBtn); this.hide(endBtn); this.hide(accBtn);
+          if (readyBtn) this.show(readyBtn);
+          if (endBtn) this.hide(endBtn);
+          if (accBtn) this.hide(accBtn);
           const noSelection = !Number.isInteger(this.secretState.mySelected);
-          readyBtn.disabled = this.secretState.myReady;
+          if (readyBtn) readyBtn.disabled = this.secretState.myReady;
           const hintEl = document.getElementById('myst-ready-hint');
           if (hintEl) {
             hintEl.classList.add('hidden');
           }
-          if (readyBtn.disabled) {
-            readyBtn.title = 'Ви вже готові';
-            readyBtn.setAttribute('aria-disabled', 'true');
-          } else {
-            readyBtn.title = '';
-            readyBtn.setAttribute('aria-disabled', 'false');
+          if (readyBtn) {
+            if (readyBtn.disabled) {
+              readyBtn.title = 'Ви вже готові';
+              readyBtn.setAttribute('aria-disabled', 'true');
+            } else {
+              readyBtn.title = '';
+              readyBtn.setAttribute('aria-disabled', 'false');
+            }
           }
-          turnInd.textContent = t.turnWait; turnInd.className = 'turn-indicator blink';
+          if (turnInd) turnInd.textContent = t.turnWait;
+          if (turnInd) turnInd.className = 'turn-indicator blink';
         } else if (this.secretState.stage === 'playing') {
-          this.hide(readyBtn);
-          if (this.secretState.isMyTurn) { this.show(endBtn); this.show(accBtn); }
-          else { this.hide(endBtn); this.hide(accBtn); }
-          accBtn.textContent = this.secretState.accuseMode ? t.secretCancelAccuseBtn : t.secretAccuseBtn;
-          turnInd.textContent = this.secretState.isMyTurn ? t.turnMine : t.turnEnemy;
-          turnInd.className = 'turn-indicator ' + (this.secretState.isMyTurn ? '' : 'enemy');
+          if (readyBtn) this.hide(readyBtn);
+          if (this.secretState.isMyTurn) {
+            if (endBtn) this.show(endBtn);
+            if (accBtn) this.show(accBtn);
+          }
+          else {
+            if (endBtn) this.hide(endBtn);
+            if (accBtn) this.hide(accBtn);
+          }
+          if (accBtn) accBtn.textContent = this.secretState.accuseMode ? t.secretCancelAccuseBtn : t.secretAccuseBtn;
+          if (turnInd) turnInd.textContent = this.secretState.isMyTurn ? t.turnMine : t.turnEnemy;
+          if (turnInd) turnInd.className = 'turn-indicator ' + (this.secretState.isMyTurn ? '' : 'enemy');
         }
       }
 
