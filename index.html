@@ -1153,6 +1153,38 @@
       min-width: 160px;
     }
 
+    /* Make the iOS fullscreen modal larger and allow the image to occupy
+       most of the available viewport while keeping it responsive. */
+    #fullscreenIosModal .modal-content {
+      width: 94%;
+      max-width: 720px;
+      max-height: 92vh;
+      padding: 18px 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Ensure card stretches to modal width and image scales to fit while
+       preserving aspect ratio. The max-height is calculated to leave room
+       for modal chrome (title / actions) on smaller screens. */
+    .fullscreen-tip-card {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .fullscreen-tip-image {
+      width: 100%;
+      height: auto;
+      max-height: calc(92vh - 140px);
+      object-fit: contain;
+      display: block;
+      border-radius: 14px;
+    }
+
     .rules-scroll {
       font-size: 0.95rem;
       line-height: 1.6;
