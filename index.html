@@ -1153,13 +1153,16 @@
       min-width: 160px;
     }
 
-    /* Make the iOS fullscreen tip modal larger and more readable */
+    /* Make the iOS fullscreen tip modal truly full-screen and dense */
     #fullscreenIosModal .modal-content {
-      width: min(98vw, 860px);
+      width: min(98vw, 960px);
       max-width: 98vw;
-      max-height: 96vh;
-      padding: 16px 14px 16px;
-      overflow-y: auto;
+      max-height: 98vh;
+      padding: 12px 10px 14px;
+      overflow-y: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
     }
 
     #fullscreenIosModal .rules-scroll {
@@ -1167,18 +1170,32 @@
       margin: 0;
     }
 
-    .fullscreen-tip-card { width: 100%; }
+    .fullscreen-tip-card {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: center;
+      justify-content: stretch;
+    }
 
     .fullscreen-tip-image {
       width: 100%;
       max-width: 100%;
-      max-height: calc(96vh - 140px);
+      max-height: calc(98vh - 170px);
       height: auto;
       object-fit: contain;
       display: block;
-      border-radius: 14px;
+      border-radius: 12px;
       border: none;
       box-shadow: none;
+    }
+
+    .fullscreen-tip-actions {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      padding-top: 8px;
     }
 
     .rules-scroll {
@@ -2324,11 +2341,14 @@
   </div>
 
   <div class="modal-overlay" id="fullscreenIosModal">
-    <div class="modal-content glass">
+    <div class="modal-content glass fullscreen-modal-content">
       <button class="close-modal-btn" id="btn-close-fullscreen-tip">×</button>
       <div class="modal-title" id="modal-fullscreen-title">Як увімкнути повний екран на iOS</div>
-      <div class="rules-scroll" style="text-align:center;">
+      <div class="fullscreen-tip-card">
         <img class="fullscreen-tip-image" src="images/Full_screen_tooltip.webp" alt="Як увімкнути повний екран на iOS" loading="lazy" onerror="this.style.display='none'" />
+        <div class="fullscreen-tip-actions">
+          <button class="btn-primary" id="btn-fullscreen-tip-ok">Зрозуміло</button>
+        </div>
       </div>
     </div>
   </div>
