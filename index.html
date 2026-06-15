@@ -1341,14 +1341,14 @@
       left: 0;
       width: 100%;
       height: 100%;
-      background: rgba(4, 4, 8, 0.92);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
+      background: rgba(4, 4, 8, 0.95);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       display: none;
       justify-content: center;
       align-items: center;
       z-index: 2000;
-      padding: 24px;
+      padding: max(env(safe-area-inset-top, 0px), 12px) 12px max(env(safe-area-inset-bottom, 0px), 12px) 12px;
     }
 
     .fullscreen-tooltip-overlay.active {
@@ -1359,41 +1359,46 @@
     .fullscreen-tooltip-content {
       display: flex;
       flex-direction: column;
+      justify-content: space-between;
       align-items: center;
-      gap: 20px;
+      width: 100%;
+      height: 100%;
+      max-height: 100dvh;
       animation: tooltipScaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
 
     .fullscreen-tooltip-image {
       width: 100%;
-      max-width: 420px;
       height: auto;
-      border-radius: 20px;
-      box-shadow: 0 20px 60px rgba(0, 245, 212, 0.15);
+      max-height: 85dvh;
       object-fit: contain;
+      flex-grow: 1;
     }
 
-    .fullscreen-tooltip-close {
-      background: rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 50%;
-      width: 44px;
-      height: 44px;
-      font-size: 24px;
-      color: var(--text-muted);
+    .fullscreen-tooltip-button {
+      padding: 14px 32px;
+      background: linear-gradient(135deg, var(--cyan), var(--violet));
+      color: var(--bg);
+      border: none;
+      border-radius: 14px;
+      font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+      font-size: 1rem;
+      font-weight: 600;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      white-space: nowrap;
       flex-shrink: 0;
+      margin-top: 12px;
+      box-shadow: 0 8px 24px rgba(0, 245, 212, 0.25);
     }
 
-    .fullscreen-tooltip-close:hover {
-      background: rgba(255, 255, 255, 0.15);
-      color: var(--text);
-      border-color: rgba(255, 255, 255, 0.25);
-      transform: scale(1.05);
+    .fullscreen-tooltip-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(0, 245, 212, 0.35);
+    }
+
+    .fullscreen-tooltip-button:active {
+      transform: translateY(0);
     }
 
     @keyframes tooltipFadeIn {
@@ -2343,8 +2348,8 @@
 
   <div class="fullscreen-tooltip-overlay" id="fullscreenTooltipModal">
     <div class="fullscreen-tooltip-content">
-      <img src="/images/Full_screen_tooltip.webp" alt="Як увімкнути повний екран на iOS" class="fullscreen-tooltip-image" loading="lazy" />
-      <button class="fullscreen-tooltip-close" id="btn-close-tooltip">×</button>
+      <img src="/images/Full_screen_tooltip.webp" alt="Як увімкнути повний екран на iOS" class="fullscreen-tooltip-image" />
+      <button class="fullscreen-tooltip-button" id="btn-close-tooltip">Зрозуміло</button>
     </div>
   </div>
 
@@ -4320,22 +4325,15 @@
         if (!tooltipModal) return;
 
         tooltipModal.classList.add('active');
-
-        const handleClose = () => this.closeFullscreenTooltip();
-        closeBtn.addEventListener('click', handleClose);
-        tooltipModal.addEventListener('click', (e) => {
-          if (e.target === tooltipModal) handleClose();
-        });
+        closeBtn.onclick = () => this.closeFullscreenTooltip();
       }
 
       closeFullscreenTooltip() {
         const tooltipModal = document.getElementById('fullscreenTooltipModal');
-        const closeBtn = document.getElementById('btn-close-tooltip');
 
         if (!tooltipModal) return;
 
         tooltipModal.classList.remove('active');
-        closeBtn.removeEventListener('click', this.closeFullscreenTooltip);
       }
 
       updateFullscreenIcon() {
