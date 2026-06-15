@@ -1850,7 +1850,7 @@
       }
     }
 
-    @media (max-width: 760px) {
+    @media (max-width: 760px) and (orientation: portrait) {
       .mystery-layout {
         flex-direction: column;
         gap: 10px;
@@ -1897,7 +1897,7 @@
       }
     }
 
-    @media (max-width: 640px) {
+    @media (max-width: 640px) and (orientation: portrait) {
       .mystery-layout {
         flex-direction: column;
         gap: 8px;
@@ -1942,6 +1942,62 @@
         font-size: clamp(0.75rem, 2vw, 0.85rem);
         padding: 8px;
         min-height: 44px;
+      }
+    }
+
+    @media (orientation: landscape) and (max-width: 760px) {
+      .mystery-layout {
+        flex-direction: row;
+        gap: 8px;
+        padding: 8px;
+        min-height: calc(100dvh - var(--screen-pt) - var(--screen-pb) - 16px);
+        height: calc(100dvh - var(--screen-pt) - var(--screen-pb) - 16px);
+        align-items: stretch;
+      }
+
+      .mystery-grid-wrap {
+        flex: 1 1 0;
+        min-width: 0;
+        width: 72%;
+        max-width: calc(100% - 160px);
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-auto-rows: minmax(86px, 1fr);
+        gap: 8px;
+        padding: 8px;
+        max-height: 100%;
+        height: 100%;
+        overflow-y: hidden;
+      }
+
+      .mystery-sidebar {
+        flex: 0 0 28%;
+        min-width: 150px;
+        max-width: 28%;
+        padding: 10px;
+        height: 100%;
+        max-height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+
+      .my-target-wrap .mystery-card {
+        max-width: 120px;
+      }
+
+      .turn-indicator {
+        font-size: 0.78rem;
+        padding: 6px 8px;
+      }
+
+      .mystery-actions {
+        gap: 8px;
+      }
+
+      .mystery-actions button {
+        font-size: clamp(0.72rem, 2vw, 0.82rem);
+        padding: 8px 10px;
+        min-height: 40px;
       }
     }
 
