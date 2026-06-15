@@ -1335,6 +1335,87 @@
       }
     }
 
+    .fullscreen-tooltip-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(4, 4, 8, 0.92);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+      padding: 24px;
+    }
+
+    .fullscreen-tooltip-overlay.active {
+      display: flex;
+      animation: tooltipFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .fullscreen-tooltip-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      animation: tooltipScaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .fullscreen-tooltip-image {
+      width: 100%;
+      max-width: 420px;
+      height: auto;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0, 245, 212, 0.15);
+      object-fit: contain;
+    }
+
+    .fullscreen-tooltip-close {
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 50%;
+      width: 44px;
+      height: 44px;
+      font-size: 24px;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      flex-shrink: 0;
+    }
+
+    .fullscreen-tooltip-close:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: var(--text);
+      border-color: rgba(255, 255, 255, 0.25);
+      transform: scale(1.05);
+    }
+
+    @keyframes tooltipFadeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes tooltipScaleIn {
+      from {
+        transform: scale(0.92);
+        opacity: 0;
+      }
+      to {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+
     .huge-code {
       font-family: 'Unbounded', sans-serif;
       font-size: clamp(2.1rem, 8vw, 3.5rem);
@@ -2257,6 +2338,13 @@
       <button class="close-modal-btn" id="btn-close-info">×</button>
       <div class="modal-title" id="modal-info-title">Опис персонажа</div>
       <div class="rules-scroll" style="text-align:center;" id="modal-info-body"></div>
+    </div>
+  </div>
+
+  <div class="fullscreen-tooltip-overlay" id="fullscreenTooltipModal">
+    <div class="fullscreen-tooltip-content">
+      <img src="/images/Full_screen_tooltip.webp" alt="Як увімкнути повний екран на iOS" class="fullscreen-tooltip-image" loading="lazy" />
+      <button class="fullscreen-tooltip-close" id="btn-close-tooltip">×</button>
     </div>
   </div>
 
@@ -4219,10 +4307,35 @@
               const res = requestFullScreen.call(docEl);
               if (res && typeof res.catch === 'function') res.catch(() => this.showToast("Повноекранний режим заблоковано на цьому пристрої."));
             } catch (e) { this.showToast("Помилка активації повного екрану."); }
-          } else { this.showToast("iOS не підтримує це. Використайте налаштування сторінки"); }
+          } else { this.showFullscreenTooltip(); }
         } else {
           if (cancelFullScreen) cancelFullScreen.call(doc);
         }
+      }
+
+      showFullscreenTooltip() {
+        const tooltipModal = document.getElementById('fullscreenTooltipModal');
+        const closeBtn = document.getElementById('btn-close-tooltip');
+
+        if (!tooltipModal) return;
+
+        tooltipModal.classList.add('active');
+
+        const handleClose = () => this.closeFullscreenTooltip();
+        closeBtn.addEventListener('click', handleClose);
+        tooltipModal.addEventListener('click', (e) => {
+          if (e.target === tooltipModal) handleClose();
+        });
+      }
+
+      closeFullscreenTooltip() {
+        const tooltipModal = document.getElementById('fullscreenTooltipModal');
+        const closeBtn = document.getElementById('btn-close-tooltip');
+
+        if (!tooltipModal) return;
+
+        tooltipModal.classList.remove('active');
+        closeBtn.removeEventListener('click', this.closeFullscreenTooltip);
       }
 
       updateFullscreenIcon() {
