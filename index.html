@@ -1153,16 +1153,18 @@
       min-width: 160px;
     }
 
-    /* Make the iOS fullscreen tip modal truly full-screen and dense */
+    /* Make the iOS fullscreen tip modal edge-to-edge */
     #fullscreenIosModal .modal-content {
-      width: min(98vw, 960px);
-      max-width: 98vw;
-      max-height: 98vh;
-      padding: 12px 10px 14px;
-      overflow-y: hidden;
+      width: 100vw;
+      max-width: 100vw;
+      height: 100vh;
+      max-height: 100vh;
+      padding: 0;
+      border-radius: 0;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      justify-content: flex-start;
     }
 
     #fullscreenIosModal .rules-scroll {
@@ -1172,21 +1174,20 @@
 
     .fullscreen-tip-card {
       width: 100%;
+      min-height: 100%;
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      align-items: center;
-      justify-content: stretch;
+      gap: 0;
+      align-items: stretch;
+      justify-content: flex-start;
     }
 
     .fullscreen-tip-image {
       width: 100%;
-      max-width: 100%;
-      max-height: calc(98vh - 170px);
-      height: auto;
+      height: 100vh;
       object-fit: contain;
       display: block;
-      border-radius: 12px;
+      border-radius: 0;
       border: none;
       box-shadow: none;
     }
