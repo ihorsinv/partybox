@@ -1153,36 +1153,22 @@
       min-width: 160px;
     }
 
-    /* Make the iOS fullscreen modal larger and allow the image to occupy
-       most of the available viewport while keeping it responsive. */
+    /* Keep fullscreen tip modal consistent with other info modals */
     #fullscreenIosModal .modal-content {
-      width: 94%;
-      max-width: 720px;
-      max-height: 92vh;
-      padding: 18px 18px 22px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      width: min(92vw, 640px);
+      max-width: 92vw;
+      max-height: 85vh;
+      overflow-y: auto;
     }
 
-    /* Ensure card stretches to modal width and image scales to fit while
-       preserving aspect ratio. The max-height is calculated to leave room
-       for modal chrome (title / actions) on smaller screens. */
-    .fullscreen-tip-card {
-      width: 100%;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      align-items: center;
-    }
+    .fullscreen-tip-card { width: 100%; }
 
     .fullscreen-tip-image {
       width: 100%;
       height: auto;
-      max-height: calc(92vh - 140px);
       object-fit: contain;
       display: block;
-      border-radius: 14px;
+      border-radius: 12px;
     }
 
     .rules-scroll {
@@ -2330,12 +2316,9 @@
   <div class="modal-overlay" id="fullscreenIosModal">
     <div class="modal-content glass">
       <button class="close-modal-btn" id="btn-close-fullscreen-tip">×</button>
-      <div class="modal-title">Як увімкнути повний екран на iOS</div>
-      <div class="fullscreen-tip-card">
-        <img class="fullscreen-tip-image" src="images/Full_screen_tooltip.webp" alt="Підказка: повний екран на iOS" loading="lazy" onerror="this.style.display='none'" />
-        <div class="fullscreen-tip-actions">
-          <button class="btn-primary" id="btn-fullscreen-tip-ok">Зрозуміло</button>
-        </div>
+      <div class="modal-title" id="modal-fullscreen-title">Як увімкнути повний екран на iOS</div>
+      <div class="rules-scroll" style="text-align:center;">
+        <img class="fullscreen-tip-image" src="images/Full_screen_tooltip.webp" alt="Як увімкнути повний екран на iOS" loading="lazy" onerror="this.style.display='none'" />
       </div>
     </div>
   </div>
