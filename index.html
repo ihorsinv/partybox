@@ -4030,7 +4030,10 @@
         const el = id => document.getElementById(id);
         if (el('btn-rules')) el('btn-rules').textContent = t.rulesBtn;
         if (el('modal-rules-title')) el('modal-rules-title').textContent = t.rulesModalTitle;
-        if (el('modal-rules-body')) el('modal-rules-body').innerHTML = this.currentGame === 'secret' ? t.secretrulesContent : t.spyrulesContent;
+        if (el('modal-rules-body')) {
+          const rulesBody = el('modal-rules-body');
+          rulesBody.innerHTML = this.currentGame === 'secret' ? t.secretrulesContent : t.spyrulesContent;
+        }
         if (el('menu-subtitle')) el('menu-subtitle').textContent = t.menuSubtitle;
         if (el('menu-spy-title')) el('menu-spy-title').textContent = t.menuSpyTitle;
         if (el('menu-spy-desc')) el('menu-spy-desc').textContent = t.menuSpyDesc;
@@ -4041,7 +4044,21 @@
         if (el('role-host-title')) el('role-host-title').textContent = t.roleHost;
         if (el('role-guest-title')) el('role-guest-title').textContent = t.roleGuest;
         if (el('setup-label-players')) el('setup-label-players').textContent = t.setupPlayers;
-        if (el('setup-spy-hint')) el('setup-spy-hint').innerHTML = t.setupSpyHint.replace('{N}', Math.floor(this.state.playerCount / 3));
+        if (el('setup-spy-hint')) {
+          const hintEl = el('setup-spy-hint');
+          hintEl.textContent = '';
+          const hintValue = t.setupSpyHint.replace('{N}', Math.floor(this.state.playerCount / 3));
+          const hintParts = hintValue.split(/<strong>(.*?)<\/strong>/);
+          hintParts.forEach((part, idx) => {
+            if (idx % 2 === 1) {
+              const strong = document.createElement('strong');
+              strong.textContent = part;
+              hintEl.appendChild(strong);
+            } else if (part.length > 0) {
+              hintEl.appendChild(document.createTextNode(part.replace(/&nbsp;/g, '\u00A0')));
+            }
+          });
+        }
         if (el('setup-label-categories')) el('setup-label-categories').textContent = t.setupCategories;
         if (el('btn-select-all')) el('btn-select-all').textContent = this.state.selectedCats.size === AppCategories.length ? t.deselectAll : t.selectAll;
         if (el('btn-start-deal')) el('btn-start-deal').textContent = t.startBtn;
@@ -4052,7 +4069,16 @@
           if (el('text-tap-open')) el('text-tap-open').textContent = t.tapToOpen;
           if (el('btn-restart-action')) el('btn-restart-action').textContent = t.restartBtn;
         }
-        if (el('final-title')) el('final-title').innerHTML = t.finalTitle;
+        if (el('final-title')) {
+          const finalTitleEl = el('final-title');
+          finalTitleEl.textContent = '';
+          t.finalTitle.split(/<br\s*\/?>/i).forEach((line, index, arr) => {
+            finalTitleEl.appendChild(document.createTextNode(line));
+            if (index < arr.length - 1) {
+              finalTitleEl.appendChild(document.createElement('br'));
+            }
+          });
+        }
         if (el('label-stat-players')) el('label-stat-players').textContent = t.finalPlayers;
         if (el('label-stat-spies')) el('label-stat-spies').textContent = t.finalSpies;
         if (el('final-description')) el('final-description').textContent = t.finalDesc;
@@ -4097,7 +4123,32 @@
           const el = document.createElement('div');
           el.className = 'cat-toggle' + (active ? ' active' : '');
           el.dataset.id = cat.id;
-          el.innerHTML = `<div class="ct-icon">${cat.icon}</div><div style="flex:1;"><div class="ct-name">${cat.name}</div><div class="ct-count">${cat.chars.length} персонажів</div></div><div class="ct-check">${active ? '✓' : ''}</div>`;
+
+          const iconEl = document.createElement('div');
+          iconEl.className = 'ct-icon';
+          iconEl.textContent = cat.icon;
+
+          const infoWrapper = document.createElement('div');
+          infoWrapper.style.flex = '1';
+
+          const nameEl = document.createElement('div');
+          nameEl.className = 'ct-name';
+          nameEl.textContent = cat.name;
+
+          const countEl = document.createElement('div');
+          countEl.className = 'ct-count';
+          countEl.textContent = `${cat.chars.length} персонажів`;
+
+          infoWrapper.appendChild(nameEl);
+          infoWrapper.appendChild(countEl);
+
+          const checkEl = document.createElement('div');
+          checkEl.className = 'ct-check';
+          checkEl.textContent = active ? '✓' : '';
+
+          el.appendChild(iconEl);
+          el.appendChild(infoWrapper);
+          el.appendChild(checkEl);
           container.appendChild(el);
         });
 
@@ -4277,25 +4328,104 @@
         const t = AppText;
         if (isSpy) {
           back.className = 'flip-face flip-back back-spy';
-          back.innerHTML = `<div class="spy-content"><div class="spy-emoji">🕵️‍♂️</div><div class="spy-title">${t.youAreSpy}</div><div class="spy-sub">${t.spyTask}</div></div><div class="spy-card-info"><div class="spy-badge"><div class="spy-dot"></div><div class="spy-badge-text">${t.spyBadge}</div></div></div>`;
+          back.textContent = '';
+
+          const spyContent = document.createElement('div');
+          spyContent.className = 'spy-content';
+
+          const spyEmoji = document.createElement('div');
+          spyEmoji.className = 'spy-emoji';
+          spyEmoji.textContent = '🕵️‍♂️';
+
+          const spyTitle = document.createElement('div');
+          spyTitle.className = 'spy-title';
+          spyTitle.textContent = t.youAreSpy;
+
+          const spySub = document.createElement('div');
+          spySub.className = 'spy-sub';
+          spySub.textContent = t.spyTask;
+
+          spyContent.appendChild(spyEmoji);
+          spyContent.appendChild(spyTitle);
+          spyContent.appendChild(spySub);
+
+          const spyInfo = document.createElement('div');
+          spyInfo.className = 'spy-card-info';
+          const spyBadge = document.createElement('div');
+          spyBadge.className = 'spy-badge';
+          const spyDot = document.createElement('div');
+          spyDot.className = 'spy-dot';
+          const spyBadgeText = document.createElement('div');
+          spyBadgeText.className = 'spy-badge-text';
+          spyBadgeText.textContent = t.spyBadge;
+
+          spyBadge.appendChild(spyDot);
+          spyBadge.appendChild(spyBadgeText);
+          spyInfo.appendChild(spyBadge);
+
+          back.appendChild(spyContent);
+          back.appendChild(spyInfo);
         } else {
           back.className = 'flip-face flip-back back-char';
+          back.textContent = '';
           const charName = this.state.chosenChar.name;
-          back.innerHTML = `
-        <div class="card-img-wrap">
-          <div class="card-img-placeholder" id="card-ph">${this.state.chosenChar.emoji}</div>
-          <div class="img-loader" id="img-ldr"><div class="spinner"></div></div>
-          <img class="card-img loading" id="card-photo" alt="${charName}"/>
-          <div class="card-img-overlay"></div>
-        </div>
-        <div class="card-info">
-          <div class="info-trigger-btn" id="spy-info-btn">i</div>
-          <div class="card-top-label">${t.characterYour}</div>
-          <div class="card-name">${charName}</div>
-          <div class="card-bot-label">${t.characterWarn}</div>
-        </div>`;
-          document.getElementById('spy-info-btn').onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
-          const imgEl = back.querySelector('#card-photo');
+
+          const imgWrap = document.createElement('div');
+          imgWrap.className = 'card-img-wrap';
+
+          const placeholder = document.createElement('div');
+          placeholder.className = 'card-img-placeholder';
+          placeholder.id = 'card-ph';
+          placeholder.textContent = this.state.chosenChar.emoji;
+
+          const loader = document.createElement('div');
+          loader.className = 'img-loader';
+          const spinner = document.createElement('div');
+          spinner.className = 'spinner';
+          loader.appendChild(spinner);
+
+          const imgEl = document.createElement('img');
+          imgEl.className = 'card-img loading';
+          imgEl.id = 'card-photo';
+          imgEl.alt = charName;
+
+          const overlay = document.createElement('div');
+          overlay.className = 'card-img-overlay';
+
+          imgWrap.appendChild(placeholder);
+          imgWrap.appendChild(loader);
+          imgWrap.appendChild(imgEl);
+          imgWrap.appendChild(overlay);
+
+          const info = document.createElement('div');
+          info.className = 'card-info';
+
+          const infoBtn = document.createElement('div');
+          infoBtn.className = 'info-trigger-btn';
+          infoBtn.id = 'spy-info-btn';
+          infoBtn.textContent = 'i';
+
+          const topLabel = document.createElement('div');
+          topLabel.className = 'card-top-label';
+          topLabel.textContent = t.characterYour;
+
+          const nameLabel = document.createElement('div');
+          nameLabel.className = 'card-name';
+          nameLabel.textContent = charName;
+
+          const botLabel = document.createElement('div');
+          botLabel.className = 'card-bot-label';
+          botLabel.textContent = t.characterWarn;
+
+          info.appendChild(infoBtn);
+          info.appendChild(topLabel);
+          info.appendChild(nameLabel);
+          info.appendChild(botLabel);
+
+          back.appendChild(imgWrap);
+          back.appendChild(info);
+
+          infoBtn.onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
           ImageLoader.bind(imgEl, this.state.chosenChar, { hidePlaceholder: true });
         }
         this.hide('deal-prompt'); this.show('flip-scene');
@@ -4689,7 +4819,9 @@
           placeholder.textContent = char.emoji || '';
           const loader = document.createElement('div');
           loader.className = 'img-loader';
-          loader.innerHTML = '<div class="spinner"></div>';
+          const spinner = document.createElement('div');
+          spinner.className = 'spinner';
+          loader.appendChild(spinner);
           const imgEl = document.createElement('img');
           imgEl.className = 'card-img loading';
           imgEl.alt = charName;
