@@ -3622,7 +3622,7 @@
        */
       validateRoomCode(code) {
         if (!code || typeof code !== 'string') return false;
-        return code.length === this.config.ROOM_CODE_LENGTH && /^\d+$/.test(code);
+        return new RegExp('^[0-9]{' + this.config.ROOM_CODE_LENGTH + '}$').test(code);
       }
 
       /**
@@ -3637,36 +3637,40 @@
     }
 
     class NetworkManager {
-      constructor() {
+      constructor(auth = null, authReadyPromise = Promise.resolve()) {
         this._roomRef = null;
         this._stateListener = false;
         this._guestListenerActive = false;
-
-        // Подготовить промис, который резолвится, когда есть auth.currentUser
-        this._authReady = (async () => {
-          return new Promise(resolve => {
-            const unsub = firebase.auth().onAuthStateChanged(user => {
-              if (user) { resolve(user); unsub(); }
-            });
-            // Если пользователя нет — попытаться анонимно залогинить
-            if (!firebase.auth().currentUser) {
-              firebase.auth().signInAnonymously().catch(() => { /* ignore */ });
-            }
-          });
-        })();
+        this.auth = auth;
+        this.authReadyPromise = authReadyPromise;
       }
-      
+
+      setAuth(auth, authReadyPromise) {
+        this.auth = auth;
+        this.authReadyPromise = authReadyPromise;
+      }
+
+      async ensureAuth() {
+        if (this.authReadyPromise) {
+          await this.authReadyPromise;
+        }
+        if (!this.auth || !this.auth.currentUser) {
+          throw new Error('unauthenticated');
+        }
+      }
+
       async createRoom(code, grid, startingRole = 'host') {
-        await this._authReady;
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
+        await this.ensureAuth();
+        const authUid = this.auth.currentUser.uid;
         const roomRef = firebase.database().ref('rooms/' + code);
         const snap = await roomRef.once('value');
         if (snap.exists()) throw new Error('roomcode-collision');
-        const uid = firebase.auth().currentUser ? firebase.auth().currentUser.uid : null;
+
         const roomData = {
           grid: grid,
-          host: { uid: uid, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
-          guest: { selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
+          host: { uid: authUid, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
+          guest: { uid: null, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
           currentTurn: startingRole, status: 'lobby', winner: null,
           createdAt: firebase.database.ServerValue.TIMESTAMP,
           hostOnline: true, guestOnline: false
@@ -3684,8 +3688,9 @@
       }
 
       async joinRoom(code) {
-        await this._authReady;
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
+        await this.ensureAuth();
+        const authUid = this.auth.currentUser.uid;
         const roomRef = firebase.database().ref('rooms/' + code);
         const snap = await roomRef.once('value');
         if (!snap.exists()) throw new Error('room-not-found');
@@ -3694,13 +3699,17 @@
         if (roomData.guestOnline === true) throw new Error('guest-already-joined');
         if (roomData.hostOnline !== true) throw new Error('host-offline');
 
-        // Записать гостя как отдельную точку (atomic point write)
-        const uid = firebase.auth().currentUser ? firebase.auth().currentUser.uid : null;
-        const guestObj = { uid: uid, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false };
-        await roomRef.child('guest').set(guestObj);
+        const guestPayload = {
+          uid: authUid,
+          selection: null,
+          eliminated: [],
+          pendingEliminated: [],
+          ready: false,
+          guess: null,
+          requestReplay: false
+        };
+        await roomRef.child('guest').set(guestPayload);
         await roomRef.child('guestOnline').set(true);
-        // При отключении гостя убрать запись гостя и пометить offline
-        await roomRef.child('guest').onDisconnect().remove();
         await roomRef.child('guestOnline').onDisconnect().set(false);
         this._roomRef = roomRef;
         return roomData;
@@ -3740,19 +3749,20 @@
       }
 
       async updateState(path, value) {
-        await this._authReady;
         if (!this._roomRef) return;
+        await this.ensureAuth();
         await this._roomRef.child(path).set(value);
       }
 
       async updateStates(values) {
-        await this._authReady;
         if (!this._roomRef) return;
+        await this.ensureAuth();
         await this._roomRef.update(values);
       }
 
       async disconnect(role) {
         if (!this._roomRef) return;
+        await this.ensureAuth();
         try { await this._roomRef.onDisconnect().cancel(); } catch (e) { }
         if (role === 'host') {
           await this._roomRef.remove();
@@ -3768,7 +3778,7 @@
       }
 
       _isValidRoomCode(code) {
-        return new RegExp(`^[0-9]{${AppConfig.ROOM_CODE_LENGTH}}$`).test(code);
+        return typeof code === 'string' && new RegExp('^[0-9]{' + AppConfig.ROOM_CODE_LENGTH + '}$').test(code);
       }
     }
 
@@ -3864,7 +3874,9 @@
         this.ui = new UIManager();
         this.stateManager = new StateManager();
         this.engine = new GameEngine();
-        this.network = new NetworkManager();
+        this.auth = firebase.auth();
+        this.authReadyPromise = this.initAnonymousAuth();
+        this.network = new NetworkManager(this.auth, this.authReadyPromise);
         this.gameHistory = new GameHistory();
 
         // Легаси для обратної сумісності (з часом видалити)
@@ -3900,6 +3912,33 @@
         this.initCategories('cats-container', this.state.selectedCats, this.toggleCategory.bind(this));
         this.setupCategoriesEventDelegation('cats-container', this.state.selectedCats, this.toggleCategory.bind(this));
         this.updateStaticTexts();
+      }
+
+      async initAnonymousAuth() {
+        return new Promise(resolve => {
+          this.auth.onAuthStateChanged(async user => {
+            if (user) {
+              this.currentUser = user;
+              resolve(user);
+              return;
+            }
+            try {
+              const result = await this.auth.signInAnonymously();
+              this.currentUser = result.user;
+              resolve(result.user);
+            } catch (error) {
+              console.warn('Firebase anonymous auth failed', error);
+              resolve(null);
+            }
+          });
+        });
+      }
+
+      async waitForAuth() {
+        if (this.authReadyPromise) {
+          await this.authReadyPromise;
+        }
+        if (!this.currentUser) throw new Error('unauthenticated');
       }
 
       secureRandomInt(max) {
@@ -4238,41 +4277,25 @@
         const t = AppText;
         if (isSpy) {
           back.className = 'flip-face flip-back back-spy';
-          // Построить содержимое безопасно
-          while (back.firstChild) back.removeChild(back.firstChild);
-          const spyContent = document.createElement('div'); spyContent.className = 'spy-content';
-          const spyEmoji = document.createElement('div'); spyEmoji.className = 'spy-emoji'; spyEmoji.textContent = '🕵️‍♂️';
-          const spyTitle = document.createElement('div'); spyTitle.className = 'spy-title'; spyTitle.textContent = t.youAreSpy;
-          const spySub = document.createElement('div'); spySub.className = 'spy-sub'; spySub.textContent = t.spyTask;
-          spyContent.appendChild(spyEmoji); spyContent.appendChild(spyTitle); spyContent.appendChild(spySub);
-          const spyCardInfo = document.createElement('div'); spyCardInfo.className = 'spy-card-info';
-          const spyBadge = document.createElement('div'); spyBadge.className = 'spy-badge';
-          const spyDot = document.createElement('div'); spyDot.className = 'spy-dot';
-          const spyBadgeText = document.createElement('div'); spyBadgeText.className = 'spy-badge-text'; spyBadgeText.textContent = t.spyBadge;
-          spyBadge.appendChild(spyDot); spyBadge.appendChild(spyBadgeText);
-          spyCardInfo.appendChild(spyBadge);
-          back.appendChild(spyContent); back.appendChild(spyCardInfo);
+          back.innerHTML = `<div class="spy-content"><div class="spy-emoji">🕵️‍♂️</div><div class="spy-title">${t.youAreSpy}</div><div class="spy-sub">${t.spyTask}</div></div><div class="spy-card-info"><div class="spy-badge"><div class="spy-dot"></div><div class="spy-badge-text">${t.spyBadge}</div></div></div>`;
         } else {
           back.className = 'flip-face flip-back back-char';
           const charName = this.state.chosenChar.name;
-          // Построить содержимое безопасно
-          while (back.firstChild) back.removeChild(back.firstChild);
-          const imgWrap = document.createElement('div'); imgWrap.className = 'card-img-wrap';
-          const placeholder = document.createElement('div'); placeholder.className = 'card-img-placeholder'; placeholder.id = 'card-ph'; placeholder.textContent = this.state.chosenChar.emoji || '';
-          const loader = document.createElement('div'); loader.className = 'img-loader'; const spinner = document.createElement('div'); spinner.className = 'spinner'; loader.appendChild(spinner);
-          const imgEl = document.createElement('img'); imgEl.className = 'card-img loading'; imgEl.id = 'card-photo'; imgEl.alt = charName;
-          const overlay = document.createElement('div'); overlay.className = 'card-img-overlay';
-          imgWrap.appendChild(placeholder); imgWrap.appendChild(loader); imgWrap.appendChild(imgEl); imgWrap.appendChild(overlay);
-
-          const infoDiv = document.createElement('div'); infoDiv.className = 'card-info';
-          const infoBtn = document.createElement('div'); infoBtn.className = 'info-trigger-btn'; infoBtn.id = 'spy-info-btn'; infoBtn.textContent = 'i';
-          const topLabel = document.createElement('div'); topLabel.className = 'card-top-label'; topLabel.textContent = t.characterYour;
-          const nameDiv = document.createElement('div'); nameDiv.className = 'card-name'; nameDiv.textContent = charName;
-          const botLabel = document.createElement('div'); botLabel.className = 'card-bot-label'; botLabel.textContent = t.characterWarn;
-          infoDiv.appendChild(infoBtn); infoDiv.appendChild(topLabel); infoDiv.appendChild(nameDiv); infoDiv.appendChild(botLabel);
-
-          back.appendChild(imgWrap); back.appendChild(infoDiv);
-          infoBtn.onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
+          back.innerHTML = `
+        <div class="card-img-wrap">
+          <div class="card-img-placeholder" id="card-ph">${this.state.chosenChar.emoji}</div>
+          <div class="img-loader" id="img-ldr"><div class="spinner"></div></div>
+          <img class="card-img loading" id="card-photo" alt="${charName}"/>
+          <div class="card-img-overlay"></div>
+        </div>
+        <div class="card-info">
+          <div class="info-trigger-btn" id="spy-info-btn">i</div>
+          <div class="card-top-label">${t.characterYour}</div>
+          <div class="card-name">${charName}</div>
+          <div class="card-bot-label">${t.characterWarn}</div>
+        </div>`;
+          document.getElementById('spy-info-btn').onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
+          const imgEl = back.querySelector('#card-photo');
           ImageLoader.bind(imgEl, this.state.chosenChar, { hidePlaceholder: true });
         }
         this.hide('deal-prompt'); this.show('flip-scene');
@@ -4312,47 +4335,58 @@
         const name = charData.name || charData.nameRU || 'Персонаж';
         const description = charData.desc || charData.descRU || 'Опис відсутній.';
         const enlargeImage = options.enlargeImage === true;
-        document.getElementById('modal-info-title').textContent = name;
+        const modalTitle = document.getElementById('modal-info-title');
         const modalBody = document.getElementById('modal-info-body');
-        if (modalBody) {
-          while (modalBody.firstChild) modalBody.removeChild(modalBody.firstChild);
-          if (enlargeImage) {
-            const wrap = document.createElement('div');
-            wrap.style.display = 'flex'; wrap.style.justifyContent = 'center'; wrap.style.width = '100%'; wrap.style.marginBottom = '18px';
-            const imgEl = document.createElement('img');
-            imgEl.className = 'card-img loading';
-            imgEl.id = 'modal-char-photo';
-            imgEl.alt = name;
-            imgEl.style.width = 'auto'; imgEl.style.height = 'auto'; imgEl.style.maxWidth = 'calc(100vw - 56px)'; imgEl.style.maxHeight = 'calc(100vh - 220px)'; imgEl.style.borderRadius = '20px'; imgEl.style.objectFit = 'contain'; imgEl.style.display = 'block';
-            wrap.appendChild(imgEl);
-            const p = document.createElement('p');
-            p.style.fontSize = '1rem'; p.style.lineHeight = '1.6'; p.style.color = 'var(--text)';
-            p.textContent = description;
-            modalBody.appendChild(wrap);
-            modalBody.appendChild(p);
-          } else {
-            const emojiDiv = document.createElement('div');
-            emojiDiv.style.fontSize = '4.5rem'; emojiDiv.style.marginBottom = '14px'; emojiDiv.style.textShadow = '0 4px 12px rgba(0,0,0,0.45)';
-            emojiDiv.textContent = charData.emoji || '🔍';
-            const p = document.createElement('p');
-            p.style.fontSize = '1.05rem'; p.style.lineHeight = '1.6'; p.style.color = 'var(--text)'; p.style.fontWeight = '500';
-            p.textContent = description;
-            modalBody.appendChild(emojiDiv);
-            modalBody.appendChild(p);
-          }
-        }
+        if (modalTitle) modalTitle.textContent = name;
+        if (!modalBody) return;
+        modalBody.textContent = '';
         if (enlargeImage) {
-          const modalImg = document.getElementById('modal-char-photo');
-          if (modalImg) {
-            const url = ImageLoader.getCharImage(charData);
-            if (url) {
-              modalImg.src = url;
-              modalImg.onload = () => modalImg.classList.remove('loading');
-              modalImg.onerror = () => this.hide(modalImg);
-            } else {
-              this.hide(modalImg);
-            }
+          const wrapper = document.createElement('div');
+          wrapper.style.display = 'flex';
+          wrapper.style.justifyContent = 'center';
+          wrapper.style.width = '100%';
+          wrapper.style.marginBottom = '18px';
+          const modalImg = document.createElement('img');
+          modalImg.className = 'card-img loading';
+          modalImg.id = 'modal-char-photo';
+          modalImg.alt = name;
+          modalImg.style.width = 'auto';
+          modalImg.style.height = 'auto';
+          modalImg.style.maxWidth = 'calc(100vw - 56px)';
+          modalImg.style.maxHeight = 'calc(100vh - 220px)';
+          modalImg.style.borderRadius = '20px';
+          modalImg.style.objectFit = 'contain';
+          modalImg.style.display = 'block';
+          wrapper.appendChild(modalImg);
+          const descriptionEl = document.createElement('p');
+          descriptionEl.style.fontSize = '1rem';
+          descriptionEl.style.lineHeight = '1.6';
+          descriptionEl.style.color = 'var(--text)';
+          descriptionEl.textContent = description;
+          modalBody.appendChild(wrapper);
+          modalBody.appendChild(descriptionEl);
+          const url = ImageLoader.getCharImage(charData);
+          if (url) {
+            modalImg.src = url;
+            modalImg.onload = () => modalImg.classList.remove('loading');
+            modalImg.onerror = () => this.hide(modalImg);
+          } else {
+            this.hide(modalImg);
           }
+        } else {
+          const emojiBlock = document.createElement('div');
+          emojiBlock.style.fontSize = '4.5rem';
+          emojiBlock.style.marginBottom = '14px';
+          emojiBlock.style.textShadow = '0 4px 12px rgba(0,0,0,0.45)';
+          emojiBlock.textContent = charData.emoji || '🔍';
+          const descriptionEl = document.createElement('p');
+          descriptionEl.style.fontSize = '1.05rem';
+          descriptionEl.style.lineHeight = '1.6';
+          descriptionEl.style.color = 'var(--text)';
+          descriptionEl.style.fontWeight = '500';
+          descriptionEl.textContent = description;
+          modalBody.appendChild(emojiBlock);
+          modalBody.appendChild(descriptionEl);
         }
         this.openModal('infoModal');
       }
@@ -4396,7 +4430,7 @@
       }
 
       async generateUniqueRoomCode() {
-        if (this.network && this.network._authReady) await this.network._authReady;
+        await this.waitForAuth();
         const minCode = 10 ** (AppConfig.ROOM_CODE_LENGTH - 1);
         const maxCode = 10 ** AppConfig.ROOM_CODE_LENGTH;
         for (let attempt = 0; attempt < AppConfig.MAX_ROOM_CODE_ATTEMPTS; attempt++) {
@@ -4487,8 +4521,7 @@
 
       async joinGame() {
         const code = document.getElementById('room-code-input').value.trim().replace(/\s/g, '');
-        const codeRe = new RegExp(`^\\d{${AppConfig.ROOM_CODE_LENGTH}}$`);
-        if (!codeRe.test(code)) { this.showToast(`Введіть ${AppConfig.ROOM_CODE_LENGTH} цифр`); return; }
+        if (!this.validateRoomCode(code)) { this.showToast(`Введіть ${AppConfig.ROOM_CODE_LENGTH} цифр`); return; }
         await this.network.disconnect(this.secretState.role);
         const joinBtn = document.getElementById('btn-join-game');
         joinBtn.disabled = true;
@@ -4642,61 +4675,47 @@
       initSecretGrid() {
         const gridEl = this.getElement('cards-grid') || document.getElementById('cards-grid');
         if (!gridEl) return;
-        // Очистить грид
-        while (gridEl.firstChild) gridEl.removeChild(gridEl.firstChild);
+        gridEl.innerHTML = '';
         this.secretState.grid.forEach((char, idx) => {
           const cell = document.createElement('div');
           cell.id = `card-cell-${idx}`;
           cell.className = 'card-cell';
           cell.dataset.idx = idx;
-
           const charName = char.name || '';
-
           const imgWrap = document.createElement('div');
           imgWrap.className = 'card-img-wrap';
-
           const placeholder = document.createElement('div');
           placeholder.className = 'card-img-placeholder';
           placeholder.textContent = char.emoji || '';
-
           const loader = document.createElement('div');
           loader.className = 'img-loader';
-          const spinner = document.createElement('div');
-          spinner.className = 'spinner';
-          loader.appendChild(spinner);
-
+          loader.innerHTML = '<div class="spinner"></div>';
           const imgEl = document.createElement('img');
           imgEl.className = 'card-img loading';
           imgEl.alt = charName;
-
           const overlay = document.createElement('div');
           overlay.className = 'card-img-overlay';
-
           const infoBtn = document.createElement('div');
           infoBtn.className = 'info-trigger-btn';
           infoBtn.title = 'Info';
           infoBtn.textContent = 'i';
-
           imgWrap.appendChild(placeholder);
           imgWrap.appendChild(loader);
           imgWrap.appendChild(imgEl);
           imgWrap.appendChild(overlay);
           imgWrap.appendChild(infoBtn);
-
-          const infoWrap = document.createElement('div');
-          infoWrap.className = 'secret-card-info';
+          const infoBlock = document.createElement('div');
+          infoBlock.className = 'secret-card-info';
           const topLabel = document.createElement('div');
           topLabel.className = 'card-top-label';
           topLabel.textContent = charName;
           const botLabel = document.createElement('div');
           botLabel.className = 'card-bot-label';
           botLabel.textContent = AppText.characterWarn;
-          infoWrap.appendChild(topLabel);
-          infoWrap.appendChild(botLabel);
-
+          infoBlock.appendChild(topLabel);
+          infoBlock.appendChild(botLabel);
           cell.appendChild(imgWrap);
-          cell.appendChild(infoWrap);
-
+          cell.appendChild(infoBlock);
           ImageLoader.bind(imgEl, char, { hidePlaceholder: true });
           infoBtn.onclick = (e) => { e.stopPropagation(); this.openInfoModal(char, { enlargeImage: true }, e); };
           cell.onclick = () => this.handleCardClick(idx);
