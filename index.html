@@ -3637,11 +3637,12 @@
     }
 
     class NetworkManager {
-      constructor(auth = null, authReadyPromise = Promise.resolve()) {
+      constructor(auth = null, db = null, authReadyPromise = Promise.resolve()) {
         this._roomRef = null;
         this._stateListener = false;
         this._guestListenerActive = false;
         this.auth = auth;
+        this.db = db;
         this.authReadyPromise = authReadyPromise;
       }
 
@@ -3663,7 +3664,7 @@
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
         await this.ensureAuth();
         const authUid = this.auth.currentUser.uid;
-        const roomRef = firebase.database().ref('rooms/' + code);
+        const roomRef = this.db.ref('rooms/' + code);
         const snap = await roomRef.once('value');
         if (snap.exists()) throw new Error('roomcode-collision');
 
@@ -3691,7 +3692,7 @@
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
         await this.ensureAuth();
         const authUid = this.auth.currentUser.uid;
-        const roomRef = firebase.database().ref('rooms/' + code);
+        const roomRef = this.db.ref('rooms/' + code);
         const snap = await roomRef.once('value');
         if (!snap.exists()) throw new Error('room-not-found');
         const roomData = snap.val();
@@ -3884,8 +3885,9 @@
         this.stateManager = new StateManager();
         this.engine = new GameEngine();
         this.auth = firebase.auth(app);
+        this.db = firebase.database(app);
         this.authReadyPromise = this.initAnonymousAuth();
-        this.network = new NetworkManager(this.auth, this.authReadyPromise);
+        this.network = new NetworkManager(this.auth, this.db, this.authReadyPromise);
         this.gameHistory = new GameHistory();
 
         // Легаси для обратної сумісності (з часом видалити)
