@@ -3859,22 +3859,31 @@
     class PartyBoxApp {
       constructor() {
         // Ініціалізувати Firebase
-        firebase.initializeApp({
+        const firebaseConfig = {
           apiKey: "AIzaSyBXHJoDHeh55JhCmfJgYjWyN--BZVzlM5s",
           authDomain: "partybox1303.firebaseapp.com",
           databaseURL: "https://partybox1303-default-rtdb.europe-west1.firebasedatabase.app",
           projectId: "partybox1303",
-          storageBucket: "partybox1303.firebasestorage.app",
+          storageBucket: "partybox1303.appspot.com",
           messagingSenderId: "693748041380",
           appId: "1:693748041380:web:2595063bb9a47621c20831",
           measurementId: "G-F35L57EYZP"
-        });
+        };
+
+        let app;
+        if (!firebase.apps.length) {
+          app = firebase.initializeApp(firebaseConfig);
+        } else {
+          app = firebase.app();
+        }
+
+        console.log('Firebase initialized', app.name, app.options, 'origin=', window.location.origin);
 
         // Ініціалізувати системні компоненти
         this.ui = new UIManager();
         this.stateManager = new StateManager();
         this.engine = new GameEngine();
-        this.auth = firebase.auth();
+        this.auth = firebase.auth(app);
         this.authReadyPromise = this.initAnonymousAuth();
         this.network = new NetworkManager(this.auth, this.authReadyPromise);
         this.gameHistory = new GameHistory();
@@ -3928,6 +3937,9 @@
               resolve(result.user);
             } catch (error) {
               console.warn('Firebase anonymous auth failed', error);
+              if (error.code === 'auth/configuration-not-found') {
+                console.error('Firebase Auth configuration missing or authDomain invalid. Check firebaseConfig.authDomain and loaded firebase-auth-compat.js script.');
+              }
               resolve(null);
             }
           });
