@@ -3622,7 +3622,7 @@
        */
       validateRoomCode(code) {
         if (!code || typeof code !== 'string') return false;
-        return new RegExp('^[0-9]{' + this.config.ROOM_CODE_LENGTH + '}$').test(code);
+        return code.length === this.config.ROOM_CODE_LENGTH && /^\d+$/.test(code);
       }
 
       /**
@@ -3637,83 +3637,127 @@
     }
 
     class NetworkManager {
-      constructor(auth = null, db = null, authReadyPromise = Promise.resolve()) {
+      constructor(authReadyPromise) {
         this._roomRef = null;
         this._stateListener = false;
         this._guestListenerActive = false;
-        this.auth = auth;
-        this.db = db;
-        this.authReadyPromise = authReadyPromise;
+        this._authReady = authReadyPromise || Promise.resolve(null);
+        this._roomCode = null;
+        this._currentUid = null;
+
+        // Зберігаємо UID авторизованого користувача для подальших операцій.
+        if (this._authReady && typeof this._authReady.then === 'function') {
+          this._authReady.then((user) => {
+            if (user && user.uid) this._currentUid = user.uid;
+          });
+        }
       }
 
-      setAuth(auth, authReadyPromise) {
-        this.auth = auth;
-        this.authReadyPromise = authReadyPromise;
+      async _waitForAuth() {
+        const user = await this._authReady;
+        if (!user || !user.uid) throw new Error('auth-failed');
+        this._currentUid = user.uid;
+        return user.uid;
       }
 
-      async ensureAuth() {
-        if (this.authReadyPromise) {
-          await this.authReadyPromise;
+      _translateError(error) {
+        if (!error) return error;
+        if (error.code === 'PERMISSION_DENIED' || (typeof error.message === 'string' && error.message.includes('PERMISSION_DENIED'))) {
+          const err = new Error('permission-denied');
+          err.code = 'PERMISSION_DENIED';
+          return err;
         }
-        if (!this.auth || !this.auth.currentUser) {
-          throw new Error('unauthenticated');
-        }
+        return error;
       }
 
       async createRoom(code, grid, startingRole = 'host') {
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
-        await this.ensureAuth();
-        const authUid = this.auth.currentUser.uid;
-        const roomRef = this.db.ref('rooms/' + code);
-        const snap = await roomRef.once('value');
-        if (snap.exists()) throw new Error('roomcode-collision');
+        const authUid = await this._waitForAuth();
+        const roomRef = firebase.database().ref('rooms/' + code);
 
+        // Створюємо кімнату з hostUid і guestUid для прав доступу.
         const roomData = {
           grid: grid,
-          host: { uid: authUid, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
-          guest: { uid: null, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
-          currentTurn: startingRole, status: 'lobby', winner: null,
+          host: { selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
+          guest: { selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
+          currentTurn: startingRole,
+          status: 'lobby',
+          winner: null,
           createdAt: firebase.database.ServerValue.TIMESTAMP,
-          hostOnline: true, guestOnline: false
+          hostOnline: true,
+          guestOnline: false,
+          hostUid: authUid,
+          guestUid: null
         };
-        this._roomRef = roomRef;
+
+        const transactionResult = await new Promise((resolve, reject) => {
+          roomRef.transaction((currentData) => {
+            if (currentData) return;
+            return roomData;
+          }, (error, committed, snapshot) => {
+            if (error) reject(error);
+            else resolve({ committed, snapshot });
+          }, false);
+        });
+
+        if (!transactionResult.committed) {
+          throw new Error('roomcode-collision');
+        }
+
+        const userRoomRef = firebase.database().ref('userRooms/' + authUid + '/' + code);
         try {
           await roomRef.onDisconnect().remove();
-          await roomRef.set(roomData);
+          await userRoomRef.onDisconnect().remove();
+          await userRoomRef.set(true);
+          this._roomRef = roomRef;
+          this._roomCode = code;
         } catch (err) {
-          await roomRef.onDisconnect().cancel().catch(() => { });
+          try { await roomRef.remove(); } catch (ignore) { }
           this._roomRef = null;
-          throw err;
+          throw this._translateError(err);
         }
         return roomRef;
       }
 
       async joinRoom(code) {
+        const authUid = await this._waitForAuth();
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
-        await this.ensureAuth();
-        const authUid = this.auth.currentUser.uid;
-        const roomRef = this.db.ref('rooms/' + code);
-        const snap = await roomRef.once('value');
-        if (!snap.exists()) throw new Error('room-not-found');
-        const roomData = snap.val();
-        if (roomData.status !== 'lobby') throw new Error('game-already-started');
-        if (roomData.guestOnline === true) throw new Error('guest-already-joined');
-        if (roomData.hostOnline !== true) throw new Error('host-offline');
+        const roomRef = firebase.database().ref('rooms/' + code);
 
-        const guestPayload = {
-          uid: authUid,
-          selection: null,
-          eliminated: [],
-          pendingEliminated: [],
-          ready: false,
-          guess: null,
-          requestReplay: false
-        };
-        await roomRef.child('guest').set(guestPayload);
-        await roomRef.child('guestOnline').set(true);
-        await roomRef.child('guestOnline').onDisconnect().set(false);
+        const result = await new Promise((resolve, reject) => {
+          roomRef.transaction((currentData) => {
+            if (!currentData) return;
+            if (currentData.status !== 'lobby' || currentData.hostOnline !== true) return;
+            if (currentData.guestOnline === true && currentData.guestUid === authUid) return;
+            if (currentData.guestUid && currentData.guestUid !== authUid) return;
+            if (!currentData.guestUid) currentData.guestUid = authUid;
+            currentData.guestOnline = true;
+            return currentData;
+          }, (error, committed, snapshot) => {
+            if (error) reject(error);
+            else resolve({ committed, snapshot });
+          }, false);
+        });
+
+        if (!result.committed) {
+          const snap = result.snapshot;
+          if (!snap || !snap.exists()) throw new Error('room-not-found');
+          const roomData = snap.val();
+          if (roomData.status !== 'lobby') throw new Error('game-already-started');
+          if (roomData.hostOnline !== true) throw new Error('host-offline');
+          if (roomData.guestUid && roomData.guestUid !== authUid) throw new Error('guest-already-joined');
+          if (roomData.guestOnline === true) throw new Error('guest-already-joined');
+          throw new Error('join-failed');
+        }
+
         this._roomRef = roomRef;
-        return roomData;
+        this._roomCode = code;
+        try {
+          await roomRef.child('guestOnline').onDisconnect().set(false);
+        } catch (err) {
+          // best-effort cleanup for disconnect tracking
+        }
+        return result.snapshot.val();
       }
 
       listenForGuest(onConnected) {
@@ -3750,36 +3794,49 @@
       }
 
       async updateState(path, value) {
-        if (!this._roomRef) return;
-        await this.ensureAuth();
-        await this._roomRef.child(path).set(value);
+        await this._waitForAuth();
+        if (!this._roomRef) throw new Error('no-room');
+        try {
+          await this._roomRef.child(path).set(value);
+        } catch (err) {
+          throw this._translateError(err);
+        }
       }
 
       async updateStates(values) {
-        if (!this._roomRef) return;
-        await this.ensureAuth();
-        await this._roomRef.update(values);
+        await this._waitForAuth();
+        if (!this._roomRef) throw new Error('no-room');
+        try {
+          await this._roomRef.update(values);
+        } catch (err) {
+          throw this._translateError(err);
+        }
       }
 
       async disconnect(role) {
+        await this._waitForAuth();
         if (!this._roomRef) return;
-        await this.ensureAuth();
         try { await this._roomRef.onDisconnect().cancel(); } catch (e) { }
         if (role === 'host') {
-          await this._roomRef.remove();
+          const deleteOps = [this._roomRef.remove()];
+          if (this._roomCode && this._currentUid) {
+            deleteOps.push(firebase.database().ref('userRooms/' + this._currentUid + '/' + this._roomCode).remove());
+          }
+          await Promise.all(deleteOps);
         } else {
           const snap = await this._roomRef.once('value');
           if (snap.exists()) await this._roomRef.child('guestOnline').set(false);
         }
-        this._roomRef.child('guestOnline').off();
-        this._roomRef.child('hostOnline').off();
-        this._roomRef.off();
+        try { this._roomRef.child('guestOnline').off(); } catch (e) { }
+        try { this._roomRef.child('hostOnline').off(); } catch (e) { }
+        try { this._roomRef.off(); } catch (e) { }
         this._roomRef = null;
         this._stateListener = false;
+        this._roomCode = null;
       }
 
       _isValidRoomCode(code) {
-        return typeof code === 'string' && new RegExp('^[0-9]{' + AppConfig.ROOM_CODE_LENGTH + '}$').test(code);
+        return new RegExp(`^[0-9]{${AppConfig.ROOM_CODE_LENGTH}}$`).test(code);
       }
     }
 
@@ -3860,35 +3917,27 @@
     class PartyBoxApp {
       constructor() {
         // Ініціалізувати Firebase
-        const firebaseConfig = {
+        firebase.initializeApp({
           apiKey: "AIzaSyBXHJoDHeh55JhCmfJgYjWyN--BZVzlM5s",
           authDomain: "partybox1303.firebaseapp.com",
           databaseURL: "https://partybox1303-default-rtdb.europe-west1.firebasedatabase.app",
           projectId: "partybox1303",
-          storageBucket: "partybox1303.appspot.com",
+          storageBucket: "partybox1303.firebasestorage.app",
           messagingSenderId: "693748041380",
           appId: "1:693748041380:web:2595063bb9a47621c20831",
           measurementId: "G-F35L57EYZP"
-        };
-
-        let app;
-        if (!firebase.apps.length) {
-          app = firebase.initializeApp(firebaseConfig);
-        } else {
-          app = firebase.app();
-        }
-
-        console.log('Firebase initialized', app.name, app.options, 'origin=', window.location.origin);
+        });
 
         // Ініціалізувати системні компоненти
         this.ui = new UIManager();
         this.stateManager = new StateManager();
         this.engine = new GameEngine();
-        this.auth = firebase.auth(app);
-        this.db = firebase.database(app);
-        this.authReadyPromise = this.initAnonymousAuth();
-        this.network = new NetworkManager(this.auth, this.db, this.authReadyPromise);
         this.gameHistory = new GameHistory();
+
+        // Автоматична анонімна автентифікація у фоновому режимі
+        this.currentUserUid = null;
+        this.authReady = this.initializeAuth();
+        this.network = new NetworkManager(this.authReady);
 
         // Легаси для обратної сумісності (з часом видалити)
         // Ці об'єкти використовуються старим кодом
@@ -3925,34 +3974,44 @@
         this.updateStaticTexts();
       }
 
-      async initAnonymousAuth() {
-        return new Promise(resolve => {
-          this.auth.onAuthStateChanged(async user => {
-            if (user) {
-              this.currentUser = user;
+      async initializeAuth() {
+        const auth = firebase.auth();
+        let authRequested = false;
+
+        // Автоматична фонова анонімна автентифікація.
+        // Вона не показує ніяких модальних вікон і не блокує UI.
+        return new Promise((resolve) => {
+          auth.onAuthStateChanged(async (user) => {
+            if (user && user.uid) {
+              this.currentUserUid = user.uid;
               resolve(user);
               return;
             }
+
+            if (authRequested) return;
+            authRequested = true;
+
             try {
-              const result = await this.auth.signInAnonymously();
-              this.currentUser = result.user;
-              resolve(result.user);
-            } catch (error) {
-              console.warn('Firebase anonymous auth failed', error);
-              if (error.code === 'auth/configuration-not-found') {
-                console.error('Firebase Auth configuration missing or authDomain invalid. Check firebaseConfig.authDomain and loaded firebase-auth-compat.js script.');
+              await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+            } catch (err) {
+              console.warn('Unable to set auth persistence', err);
+            }
+
+            auth.signInAnonymously().catch((error) => {
+              console.error('Anonymous authentication failed', error);
+              if (typeof this.showToast === 'function') {
+                this.showToast('Не вдалося підключитися до сервера. Перезавантажте сторінку.');
               }
               resolve(null);
+            });
+          }, (error) => {
+            console.error('Firebase auth state failed', error);
+            if (typeof this.showToast === 'function') {
+              this.showToast('Не вдалося автентифікуватися. Перезавантажте сторінку.');
             }
+            resolve(null);
           });
         });
-      }
-
-      async waitForAuth() {
-        if (this.authReadyPromise) {
-          await this.authReadyPromise;
-        }
-        if (!this.currentUser) throw new Error('unauthenticated');
       }
 
       secureRandomInt(max) {
@@ -4044,10 +4103,7 @@
         const el = id => document.getElementById(id);
         if (el('btn-rules')) el('btn-rules').textContent = t.rulesBtn;
         if (el('modal-rules-title')) el('modal-rules-title').textContent = t.rulesModalTitle;
-        if (el('modal-rules-body')) {
-          const rulesBody = el('modal-rules-body');
-          rulesBody.innerHTML = this.currentGame === 'secret' ? t.secretrulesContent : t.spyrulesContent;
-        }
+        if (el('modal-rules-body')) el('modal-rules-body').innerHTML = this.currentGame === 'secret' ? t.secretrulesContent : t.spyrulesContent;
         if (el('menu-subtitle')) el('menu-subtitle').textContent = t.menuSubtitle;
         if (el('menu-spy-title')) el('menu-spy-title').textContent = t.menuSpyTitle;
         if (el('menu-spy-desc')) el('menu-spy-desc').textContent = t.menuSpyDesc;
@@ -4058,21 +4114,7 @@
         if (el('role-host-title')) el('role-host-title').textContent = t.roleHost;
         if (el('role-guest-title')) el('role-guest-title').textContent = t.roleGuest;
         if (el('setup-label-players')) el('setup-label-players').textContent = t.setupPlayers;
-        if (el('setup-spy-hint')) {
-          const hintEl = el('setup-spy-hint');
-          hintEl.textContent = '';
-          const hintValue = t.setupSpyHint.replace('{N}', Math.floor(this.state.playerCount / 3));
-          const hintParts = hintValue.split(/<strong>(.*?)<\/strong>/);
-          hintParts.forEach((part, idx) => {
-            if (idx % 2 === 1) {
-              const strong = document.createElement('strong');
-              strong.textContent = part;
-              hintEl.appendChild(strong);
-            } else if (part.length > 0) {
-              hintEl.appendChild(document.createTextNode(part.replace(/&nbsp;/g, '\u00A0')));
-            }
-          });
-        }
+        if (el('setup-spy-hint')) el('setup-spy-hint').innerHTML = t.setupSpyHint.replace('{N}', Math.floor(this.state.playerCount / 3));
         if (el('setup-label-categories')) el('setup-label-categories').textContent = t.setupCategories;
         if (el('btn-select-all')) el('btn-select-all').textContent = this.state.selectedCats.size === AppCategories.length ? t.deselectAll : t.selectAll;
         if (el('btn-start-deal')) el('btn-start-deal').textContent = t.startBtn;
@@ -4083,16 +4125,7 @@
           if (el('text-tap-open')) el('text-tap-open').textContent = t.tapToOpen;
           if (el('btn-restart-action')) el('btn-restart-action').textContent = t.restartBtn;
         }
-        if (el('final-title')) {
-          const finalTitleEl = el('final-title');
-          finalTitleEl.textContent = '';
-          t.finalTitle.split(/<br\s*\/?>/i).forEach((line, index, arr) => {
-            finalTitleEl.appendChild(document.createTextNode(line));
-            if (index < arr.length - 1) {
-              finalTitleEl.appendChild(document.createElement('br'));
-            }
-          });
-        }
+        if (el('final-title')) el('final-title').innerHTML = t.finalTitle;
         if (el('label-stat-players')) el('label-stat-players').textContent = t.finalPlayers;
         if (el('label-stat-spies')) el('label-stat-spies').textContent = t.finalSpies;
         if (el('final-description')) el('final-description').textContent = t.finalDesc;
@@ -4137,32 +4170,7 @@
           const el = document.createElement('div');
           el.className = 'cat-toggle' + (active ? ' active' : '');
           el.dataset.id = cat.id;
-
-          const iconEl = document.createElement('div');
-          iconEl.className = 'ct-icon';
-          iconEl.textContent = cat.icon;
-
-          const infoWrapper = document.createElement('div');
-          infoWrapper.style.flex = '1';
-
-          const nameEl = document.createElement('div');
-          nameEl.className = 'ct-name';
-          nameEl.textContent = cat.name;
-
-          const countEl = document.createElement('div');
-          countEl.className = 'ct-count';
-          countEl.textContent = `${cat.chars.length} персонажів`;
-
-          infoWrapper.appendChild(nameEl);
-          infoWrapper.appendChild(countEl);
-
-          const checkEl = document.createElement('div');
-          checkEl.className = 'ct-check';
-          checkEl.textContent = active ? '✓' : '';
-
-          el.appendChild(iconEl);
-          el.appendChild(infoWrapper);
-          el.appendChild(checkEl);
+          el.innerHTML = `<div class="ct-icon">${cat.icon}</div><div style="flex:1;"><div class="ct-name">${cat.name}</div><div class="ct-count">${cat.chars.length} персонажів</div></div><div class="ct-check">${active ? '✓' : ''}</div>`;
           container.appendChild(el);
         });
 
@@ -4342,104 +4350,25 @@
         const t = AppText;
         if (isSpy) {
           back.className = 'flip-face flip-back back-spy';
-          back.textContent = '';
-
-          const spyContent = document.createElement('div');
-          spyContent.className = 'spy-content';
-
-          const spyEmoji = document.createElement('div');
-          spyEmoji.className = 'spy-emoji';
-          spyEmoji.textContent = '🕵️‍♂️';
-
-          const spyTitle = document.createElement('div');
-          spyTitle.className = 'spy-title';
-          spyTitle.textContent = t.youAreSpy;
-
-          const spySub = document.createElement('div');
-          spySub.className = 'spy-sub';
-          spySub.textContent = t.spyTask;
-
-          spyContent.appendChild(spyEmoji);
-          spyContent.appendChild(spyTitle);
-          spyContent.appendChild(spySub);
-
-          const spyInfo = document.createElement('div');
-          spyInfo.className = 'spy-card-info';
-          const spyBadge = document.createElement('div');
-          spyBadge.className = 'spy-badge';
-          const spyDot = document.createElement('div');
-          spyDot.className = 'spy-dot';
-          const spyBadgeText = document.createElement('div');
-          spyBadgeText.className = 'spy-badge-text';
-          spyBadgeText.textContent = t.spyBadge;
-
-          spyBadge.appendChild(spyDot);
-          spyBadge.appendChild(spyBadgeText);
-          spyInfo.appendChild(spyBadge);
-
-          back.appendChild(spyContent);
-          back.appendChild(spyInfo);
+          back.innerHTML = `<div class="spy-content"><div class="spy-emoji">🕵️‍♂️</div><div class="spy-title">${t.youAreSpy}</div><div class="spy-sub">${t.spyTask}</div></div><div class="spy-card-info"><div class="spy-badge"><div class="spy-dot"></div><div class="spy-badge-text">${t.spyBadge}</div></div></div>`;
         } else {
           back.className = 'flip-face flip-back back-char';
-          back.textContent = '';
           const charName = this.state.chosenChar.name;
-
-          const imgWrap = document.createElement('div');
-          imgWrap.className = 'card-img-wrap';
-
-          const placeholder = document.createElement('div');
-          placeholder.className = 'card-img-placeholder';
-          placeholder.id = 'card-ph';
-          placeholder.textContent = this.state.chosenChar.emoji;
-
-          const loader = document.createElement('div');
-          loader.className = 'img-loader';
-          const spinner = document.createElement('div');
-          spinner.className = 'spinner';
-          loader.appendChild(spinner);
-
-          const imgEl = document.createElement('img');
-          imgEl.className = 'card-img loading';
-          imgEl.id = 'card-photo';
-          imgEl.alt = charName;
-
-          const overlay = document.createElement('div');
-          overlay.className = 'card-img-overlay';
-
-          imgWrap.appendChild(placeholder);
-          imgWrap.appendChild(loader);
-          imgWrap.appendChild(imgEl);
-          imgWrap.appendChild(overlay);
-
-          const info = document.createElement('div');
-          info.className = 'card-info';
-
-          const infoBtn = document.createElement('div');
-          infoBtn.className = 'info-trigger-btn';
-          infoBtn.id = 'spy-info-btn';
-          infoBtn.textContent = 'i';
-
-          const topLabel = document.createElement('div');
-          topLabel.className = 'card-top-label';
-          topLabel.textContent = t.characterYour;
-
-          const nameLabel = document.createElement('div');
-          nameLabel.className = 'card-name';
-          nameLabel.textContent = charName;
-
-          const botLabel = document.createElement('div');
-          botLabel.className = 'card-bot-label';
-          botLabel.textContent = t.characterWarn;
-
-          info.appendChild(infoBtn);
-          info.appendChild(topLabel);
-          info.appendChild(nameLabel);
-          info.appendChild(botLabel);
-
-          back.appendChild(imgWrap);
-          back.appendChild(info);
-
-          infoBtn.onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
+          back.innerHTML = `
+        <div class="card-img-wrap">
+          <div class="card-img-placeholder" id="card-ph">${this.state.chosenChar.emoji}</div>
+          <div class="img-loader" id="img-ldr"><div class="spinner"></div></div>
+          <img class="card-img loading" id="card-photo" alt="${charName}"/>
+          <div class="card-img-overlay"></div>
+        </div>
+        <div class="card-info">
+          <div class="info-trigger-btn" id="spy-info-btn">i</div>
+          <div class="card-top-label">${t.characterYour}</div>
+          <div class="card-name">${charName}</div>
+          <div class="card-bot-label">${t.characterWarn}</div>
+        </div>`;
+          document.getElementById('spy-info-btn').onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
+          const imgEl = back.querySelector('#card-photo');
           ImageLoader.bind(imgEl, this.state.chosenChar, { hidePlaceholder: true });
         }
         this.hide('deal-prompt'); this.show('flip-scene');
@@ -4479,58 +4408,28 @@
         const name = charData.name || charData.nameRU || 'Персонаж';
         const description = charData.desc || charData.descRU || 'Опис відсутній.';
         const enlargeImage = options.enlargeImage === true;
-        const modalTitle = document.getElementById('modal-info-title');
-        const modalBody = document.getElementById('modal-info-body');
-        if (modalTitle) modalTitle.textContent = name;
-        if (!modalBody) return;
-        modalBody.textContent = '';
+        document.getElementById('modal-info-title').textContent = name;
+        document.getElementById('modal-info-body').innerHTML = enlargeImage ? `
+      <div style="display:flex; justify-content:center; width:100%; margin-bottom: 18px;">
+        <img class="card-img loading" id="modal-char-photo" alt="${name}" style="width:auto; height:auto; max-width: calc(100vw - 56px); max-height: calc(100vh - 220px); border-radius: 20px; object-fit: contain; display:block;" />
+      </div>
+      <p style="font-size: 1rem; line-height: 1.6; color: var(--text);">${description}</p>
+    ` : `
+      <div style="font-size: 4.5rem; margin-bottom: 14px; text-shadow: 0 4px 12px rgba(0,0,0,0.45);">${charData.emoji || '🔍'}</div>
+      <p style="font-size: 1.05rem; line-height: 1.6; color: var(--text); font-weight: 500;">${description}</p>
+    `;
         if (enlargeImage) {
-          const wrapper = document.createElement('div');
-          wrapper.style.display = 'flex';
-          wrapper.style.justifyContent = 'center';
-          wrapper.style.width = '100%';
-          wrapper.style.marginBottom = '18px';
-          const modalImg = document.createElement('img');
-          modalImg.className = 'card-img loading';
-          modalImg.id = 'modal-char-photo';
-          modalImg.alt = name;
-          modalImg.style.width = 'auto';
-          modalImg.style.height = 'auto';
-          modalImg.style.maxWidth = 'calc(100vw - 56px)';
-          modalImg.style.maxHeight = 'calc(100vh - 220px)';
-          modalImg.style.borderRadius = '20px';
-          modalImg.style.objectFit = 'contain';
-          modalImg.style.display = 'block';
-          wrapper.appendChild(modalImg);
-          const descriptionEl = document.createElement('p');
-          descriptionEl.style.fontSize = '1rem';
-          descriptionEl.style.lineHeight = '1.6';
-          descriptionEl.style.color = 'var(--text)';
-          descriptionEl.textContent = description;
-          modalBody.appendChild(wrapper);
-          modalBody.appendChild(descriptionEl);
-          const url = ImageLoader.getCharImage(charData);
-          if (url) {
-            modalImg.src = url;
-            modalImg.onload = () => modalImg.classList.remove('loading');
-            modalImg.onerror = () => this.hide(modalImg);
-          } else {
-            this.hide(modalImg);
+          const modalImg = document.getElementById('modal-char-photo');
+          if (modalImg) {
+            const url = ImageLoader.getCharImage(charData);
+            if (url) {
+              modalImg.src = url;
+              modalImg.onload = () => modalImg.classList.remove('loading');
+              modalImg.onerror = () => this.hide(modalImg);
+            } else {
+              this.hide(modalImg);
+            }
           }
-        } else {
-          const emojiBlock = document.createElement('div');
-          emojiBlock.style.fontSize = '4.5rem';
-          emojiBlock.style.marginBottom = '14px';
-          emojiBlock.style.textShadow = '0 4px 12px rgba(0,0,0,0.45)';
-          emojiBlock.textContent = charData.emoji || '🔍';
-          const descriptionEl = document.createElement('p');
-          descriptionEl.style.fontSize = '1.05rem';
-          descriptionEl.style.lineHeight = '1.6';
-          descriptionEl.style.color = 'var(--text)';
-          descriptionEl.style.fontWeight = '500';
-          descriptionEl.textContent = description;
-          modalBody.appendChild(emojiBlock);
-          modalBody.appendChild(descriptionEl);
         }
         this.openModal('infoModal');
       }
@@ -4574,7 +4473,6 @@
       }
 
       async generateUniqueRoomCode() {
-        await this.waitForAuth();
         const minCode = 10 ** (AppConfig.ROOM_CODE_LENGTH - 1);
         const maxCode = 10 ** AppConfig.ROOM_CODE_LENGTH;
         for (let attempt = 0; attempt < AppConfig.MAX_ROOM_CODE_ATTEMPTS; attempt++) {
@@ -4665,7 +4563,7 @@
 
       async joinGame() {
         const code = document.getElementById('room-code-input').value.trim().replace(/\s/g, '');
-        if (!this.validateRoomCode(code)) { this.showToast(`Введіть ${AppConfig.ROOM_CODE_LENGTH} цифр`); return; }
+        if (code.length !== AppConfig.ROOM_CODE_LENGTH) { this.showToast(`Введіть ${AppConfig.ROOM_CODE_LENGTH} цифр`); return; }
         await this.network.disconnect(this.secretState.role);
         const joinBtn = document.getElementById('btn-join-game');
         joinBtn.disabled = true;
@@ -4825,45 +4723,22 @@
           cell.id = `card-cell-${idx}`;
           cell.className = 'card-cell';
           cell.dataset.idx = idx;
-          const charName = char.name || '';
-          const imgWrap = document.createElement('div');
-          imgWrap.className = 'card-img-wrap';
-          const placeholder = document.createElement('div');
-          placeholder.className = 'card-img-placeholder';
-          placeholder.textContent = char.emoji || '';
-          const loader = document.createElement('div');
-          loader.className = 'img-loader';
-          const spinner = document.createElement('div');
-          spinner.className = 'spinner';
-          loader.appendChild(spinner);
-          const imgEl = document.createElement('img');
-          imgEl.className = 'card-img loading';
-          imgEl.alt = charName;
-          const overlay = document.createElement('div');
-          overlay.className = 'card-img-overlay';
-          const infoBtn = document.createElement('div');
-          infoBtn.className = 'info-trigger-btn';
-          infoBtn.title = 'Info';
-          infoBtn.textContent = 'i';
-          imgWrap.appendChild(placeholder);
-          imgWrap.appendChild(loader);
-          imgWrap.appendChild(imgEl);
-          imgWrap.appendChild(overlay);
-          imgWrap.appendChild(infoBtn);
-          const infoBlock = document.createElement('div');
-          infoBlock.className = 'secret-card-info';
-          const topLabel = document.createElement('div');
-          topLabel.className = 'card-top-label';
-          topLabel.textContent = charName;
-          const botLabel = document.createElement('div');
-          botLabel.className = 'card-bot-label';
-          botLabel.textContent = AppText.characterWarn;
-          infoBlock.appendChild(topLabel);
-          infoBlock.appendChild(botLabel);
-          cell.appendChild(imgWrap);
-          cell.appendChild(infoBlock);
+          const charName = char.name;
+          cell.innerHTML = `
+        <div class="card-img-wrap">
+          <div class="card-img-placeholder">${char.emoji}</div>
+          <div class="img-loader"><div class="spinner"></div></div>
+          <img class="card-img loading" alt="${charName}" />
+          <div class="card-img-overlay"></div>
+          <div class="info-trigger-btn" title="Info">i</div>
+        </div>
+        <div class="secret-card-info">
+          <div class="card-top-label">${charName}</div>
+          <div class="card-bot-label">${AppText.characterWarn}</div>
+        </div>`;
+          const imgEl = cell.querySelector('.card-img');
           ImageLoader.bind(imgEl, char, { hidePlaceholder: true });
-          infoBtn.onclick = (e) => { e.stopPropagation(); this.openInfoModal(char, { enlargeImage: true }, e); };
+          cell.querySelector('.info-trigger-btn').onclick = (e) => { e.stopPropagation(); this.openInfoModal(char, { enlargeImage: true }, e); };
           cell.onclick = () => this.handleCardClick(idx);
           gridEl.appendChild(cell);
         });
