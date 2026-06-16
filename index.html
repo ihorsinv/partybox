@@ -3728,7 +3728,6 @@
           roomRef.transaction((currentData) => {
             if (!currentData) return;
             if (currentData.status !== 'lobby' || currentData.hostOnline !== true) return;
-            if (currentData.guestOnline === true && currentData.guestUid === authUid) return;
             if (currentData.guestUid && currentData.guestUid !== authUid) return;
             if (!currentData.guestUid) currentData.guestUid = authUid;
             currentData.guestOnline = true;
@@ -3739,16 +3738,12 @@
           }, false);
         });
 
-        if (!result.committed) {
-          const snap = result.snapshot;
-          if (!snap || !snap.exists()) throw new Error('room-not-found');
-          const roomData = snap.val();
-          if (roomData.status !== 'lobby') throw new Error('game-already-started');
-          if (roomData.hostOnline !== true) throw new Error('host-offline');
-          if (roomData.guestUid && roomData.guestUid !== authUid) throw new Error('guest-already-joined');
-          if (roomData.guestOnline === true) throw new Error('guest-already-joined');
-          throw new Error('join-failed');
-        }
+        const snapshot = result.snapshot;
+        if (!snapshot || !snapshot.exists()) throw new Error('room-not-found');
+        const roomData = snapshot.val();
+        if (roomData.status !== 'lobby') throw new Error('game-already-started');
+        if (roomData.hostOnline !== true) throw new Error('host-offline');
+        if (roomData.guestUid && roomData.guestUid !== authUid) throw new Error('guest-already-joined');
 
         this._roomRef = roomRef;
         this._roomCode = code;
@@ -3757,7 +3752,7 @@
         } catch (err) {
           // best-effort cleanup for disconnect tracking
         }
-        return result.snapshot.val();
+        return roomData;
       }
 
       listenForGuest(onConnected) {
@@ -3999,6 +3994,7 @@
 
             auth.signInAnonymously().catch((error) => {
               console.error('Anonymous authentication failed', error);
+              this.authFailed = true;
               if (typeof this.showToast === 'function') {
                 this.showToast('Не вдалося підключитися до сервера. Перезавантажте сторінку.');
               }
@@ -4006,6 +4002,7 @@
             });
           }, (error) => {
             console.error('Firebase auth state failed', error);
+            this.authFailed = true;
             if (typeof this.showToast === 'function') {
               this.showToast('Не вдалося автентифікуватися. Перезавантажте сторінку.');
             }
@@ -4556,7 +4553,11 @@
           });
           ImageLoader.preload(this.secretState.grid).catch(() => { });
         } catch (e) {
-          this.showToast('Помилка створення кімнати. Спробуйте ще раз.');
+          if (e && e.message === 'auth-failed') {
+            this.showToast('Аутентифікація не вдалася. Перезавантажте сторінку.');
+          } else {
+            this.showToast('Помилка створення кімнати. Спробуйте ще раз.');
+          }
           document.getElementById('btn-generate-room').disabled = false;
         }
       }
@@ -4578,7 +4579,11 @@
           this.initSecretGameState();
           ImageLoader.preload(this.secretState.grid).catch(() => { });
         } catch (e) {
-          const msg = e.message === 'room-not-found' ? 'Кімнату не знайдено. Перевірте код 🔍' : 'Помилка підключення. Спробуйте ще раз.';
+          const msg = e.message === 'room-not-found'
+            ? 'Кімнату не знайдено. Перевірте код 🔍'
+            : e.message === 'auth-failed'
+              ? 'Аутентифікація не вдалася. Перезавантажте сторінку.'
+              : 'Помилка підключення. Спробуйте ще раз.';
           this.showToast(msg);
           document.getElementById('join-status').textContent = '';
           joinBtn.disabled = false;
