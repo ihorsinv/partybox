@@ -3169,7 +3169,7 @@
        */
       setHTML(id, html) {
         const el = this.getElement(id);
-        if (el) el.innerHTML = html; // keep for trusted static templates only
+        if (el) el.innerHTML = html;
       }
 
       /**
@@ -3345,7 +3345,9 @@
     class StateManager {
       constructor() {
         this.state = {
-          gameType: null,
+          gameType: null,      // 'spy' або 'secret'
+
+          // Для spy mode
           spy: {
             playerCount: 5,
             currentPlayer: 0,
@@ -3354,8 +3356,10 @@
             chosenChar: null,
             cardOpen: false
           },
+
+          // Для secret mode
           secret: {
-            role: null,
+            role: null,         // 'host', 'guest', або null
             roomCode: null,
             grid: [],
             mySelected: null,
@@ -3364,7 +3368,7 @@
             pendingEliminated: new Set(),
             isMyTurn: false,
             gameActive: false,
-            stage: 'lobby',
+            stage: 'lobby',     // 'lobby', 'selection', 'playing', 'result'
             myReady: false,
             opponentReady: false,
             accuseMode: false,
@@ -3618,7 +3622,7 @@
        */
       validateRoomCode(code) {
         if (!code || typeof code !== 'string') return false;
-        return new RegExp(`^\\d{${this.config.ROOM_CODE_LENGTH}}$`).test(code);
+        return code.length === this.config.ROOM_CODE_LENGTH && /^\d+$/.test(code);
       }
 
       /**
@@ -3637,24 +3641,33 @@
         this._roomRef = null;
         this._stateListener = false;
         this._guestListenerActive = false;
-      }
 
+        // Подготовить промис, который резолвится, когда есть auth.currentUser
+        this._authReady = (async () => {
+          return new Promise(resolve => {
+            const unsub = firebase.auth().onAuthStateChanged(user => {
+              if (user) { resolve(user); unsub(); }
+            });
+            // Если пользователя нет — попытаться анонимно залогинить
+            if (!firebase.auth().currentUser) {
+              firebase.auth().signInAnonymously().catch(() => { /* ignore */ });
+            }
+          });
+        })();
+      }
+      
       async createRoom(code, grid, startingRole = 'host') {
+        await this._authReady;
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
         const roomRef = firebase.database().ref('rooms/' + code);
         const snap = await roomRef.once('value');
         if (snap.exists()) throw new Error('roomcode-collision');
-        const authUser = firebase.auth().currentUser;
-        if (!authUser) throw new Error('not-authed');
-
+        const uid = firebase.auth().currentUser ? firebase.auth().currentUser.uid : null;
         const roomData = {
           grid: grid,
-          host: { selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
+          host: { uid: uid, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
           guest: { selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
-          hostUid: authUser.uid,
-          guestUid: '',
-          currentTurn: startingRole,
-          status: 'lobby', winner: null,
+          currentTurn: startingRole, status: 'lobby', winner: null,
           createdAt: firebase.database.ServerValue.TIMESTAMP,
           hostOnline: true, guestOnline: false
         };
@@ -3671,6 +3684,7 @@
       }
 
       async joinRoom(code) {
+        await this._authReady;
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
         const roomRef = firebase.database().ref('rooms/' + code);
         const snap = await roomRef.once('value');
@@ -3680,16 +3694,13 @@
         if (roomData.guestOnline === true) throw new Error('guest-already-joined');
         if (roomData.hostOnline !== true) throw new Error('host-offline');
 
-        const authUser = firebase.auth().currentUser;
-        if (!authUser) throw new Error('not-authed');
-
-        // Set guest UID as a separate point write to be compatible with restrictive rules
-        const guestUidSnap = await roomRef.child('guestUid').once('value');
-        const existingGuestUid = guestUidSnap.val();
-        if (existingGuestUid && existingGuestUid !== authUser.uid) throw new Error('guest-already-joined');
-        await roomRef.child('guestUid').set(authUser.uid);
-
+        // Записать гостя как отдельную точку (atomic point write)
+        const uid = firebase.auth().currentUser ? firebase.auth().currentUser.uid : null;
+        const guestObj = { uid: uid, selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false };
+        await roomRef.child('guest').set(guestObj);
         await roomRef.child('guestOnline').set(true);
+        // При отключении гостя убрать запись гостя и пометить offline
+        await roomRef.child('guest').onDisconnect().remove();
         await roomRef.child('guestOnline').onDisconnect().set(false);
         this._roomRef = roomRef;
         return roomData;
@@ -3729,11 +3740,13 @@
       }
 
       async updateState(path, value) {
+        await this._authReady;
         if (!this._roomRef) return;
         await this._roomRef.child(path).set(value);
       }
 
       async updateStates(values) {
+        await this._authReady;
         if (!this._roomRef) return;
         await this._roomRef.update(values);
       }
@@ -3870,9 +3883,8 @@
         this.pendingAccuseIndex = null;
         this.categoriesInitialized = new Set();
 
-        // Запустити ініціалізацію — дождаться анонімной авторизации перед операциями с БД
-        this._authReady = null;
-        this._initAuth().then(() => { this.init(); }).catch((err) => { console.warn('Auth init failed, continuing without auth:', err); this.init(); });
+        // Запустити ініціалізацію
+        this.init();
       }
 
       /**
@@ -3888,21 +3900,6 @@
         this.initCategories('cats-container', this.state.selectedCats, this.toggleCategory.bind(this));
         this.setupCategoriesEventDelegation('cats-container', this.state.selectedCats, this.toggleCategory.bind(this));
         this.updateStaticTexts();
-      }
-
-      _initAuth() {
-        if (this._authReady) return this._authReady;
-        this._authReady = new Promise((resolve, reject) => {
-          const unsub = firebase.auth().onAuthStateChanged(user => {
-            if (user) { try { unsub(); } catch (e) { }
-              resolve(user);
-            }
-          });
-          firebase.auth().signInAnonymously().catch(err => {
-            reject(err);
-          });
-        });
-        return this._authReady;
       }
 
       secureRandomInt(max) {
@@ -4061,13 +4058,7 @@
           const el = document.createElement('div');
           el.className = 'cat-toggle' + (active ? ' active' : '');
           el.dataset.id = cat.id;
-          const iconDiv = document.createElement('div'); iconDiv.className = 'ct-icon'; iconDiv.textContent = cat.icon;
-          const flexDiv = document.createElement('div'); flexDiv.style.flex = '1';
-          const nameDiv = document.createElement('div'); nameDiv.className = 'ct-name'; nameDiv.textContent = cat.name;
-          const countDiv = document.createElement('div'); countDiv.className = 'ct-count'; countDiv.textContent = `${cat.chars.length} персонажів`;
-          const checkDiv = document.createElement('div'); checkDiv.className = 'ct-check'; checkDiv.textContent = active ? '✓' : '';
-          flexDiv.appendChild(nameDiv); flexDiv.appendChild(countDiv);
-          el.appendChild(iconDiv); el.appendChild(flexDiv); el.appendChild(checkDiv);
+          el.innerHTML = `<div class="ct-icon">${cat.icon}</div><div style="flex:1;"><div class="ct-name">${cat.name}</div><div class="ct-count">${cat.chars.length} персонажів</div></div><div class="ct-check">${active ? '✓' : ''}</div>`;
           container.appendChild(el);
         });
 
@@ -4245,38 +4236,43 @@
         const isSpy = this.state.spySet.has(this.state.currentPlayer);
         const back = document.getElementById('flip-back');
         const t = AppText;
-        back.innerHTML = '';
         if (isSpy) {
           back.className = 'flip-face flip-back back-spy';
-          const spyWrap = document.createElement('div'); spyWrap.className = 'spy-content';
-          const emoji = document.createElement('div'); emoji.className = 'spy-emoji'; emoji.textContent = '🕵️‍♂️';
-          const title = document.createElement('div'); title.className = 'spy-title'; title.textContent = t.youAreSpy;
-          const sub = document.createElement('div'); sub.className = 'spy-sub'; sub.textContent = t.spyTask;
-          spyWrap.appendChild(emoji); spyWrap.appendChild(title); spyWrap.appendChild(sub);
-          const infoWrap = document.createElement('div'); infoWrap.className = 'spy-card-info';
-          const badge = document.createElement('div'); badge.className = 'spy-badge';
-          const dot = document.createElement('div'); dot.className = 'spy-dot';
-          const btext = document.createElement('div'); btext.className = 'spy-badge-text'; btext.textContent = t.spyBadge;
-          badge.appendChild(dot); badge.appendChild(btext); infoWrap.appendChild(badge);
-          back.appendChild(spyWrap); back.appendChild(infoWrap);
+          // Построить содержимое безопасно
+          while (back.firstChild) back.removeChild(back.firstChild);
+          const spyContent = document.createElement('div'); spyContent.className = 'spy-content';
+          const spyEmoji = document.createElement('div'); spyEmoji.className = 'spy-emoji'; spyEmoji.textContent = '🕵️‍♂️';
+          const spyTitle = document.createElement('div'); spyTitle.className = 'spy-title'; spyTitle.textContent = t.youAreSpy;
+          const spySub = document.createElement('div'); spySub.className = 'spy-sub'; spySub.textContent = t.spyTask;
+          spyContent.appendChild(spyEmoji); spyContent.appendChild(spyTitle); spyContent.appendChild(spySub);
+          const spyCardInfo = document.createElement('div'); spyCardInfo.className = 'spy-card-info';
+          const spyBadge = document.createElement('div'); spyBadge.className = 'spy-badge';
+          const spyDot = document.createElement('div'); spyDot.className = 'spy-dot';
+          const spyBadgeText = document.createElement('div'); spyBadgeText.className = 'spy-badge-text'; spyBadgeText.textContent = t.spyBadge;
+          spyBadge.appendChild(spyDot); spyBadge.appendChild(spyBadgeText);
+          spyCardInfo.appendChild(spyBadge);
+          back.appendChild(spyContent); back.appendChild(spyCardInfo);
         } else {
           back.className = 'flip-face flip-back back-char';
           const charName = this.state.chosenChar.name;
-          const wrap = document.createElement('div'); wrap.className = 'card-img-wrap';
-          const ph = document.createElement('div'); ph.className = 'card-img-placeholder'; ph.id = 'card-ph'; ph.textContent = this.state.chosenChar.emoji || '';
-          const ldr = document.createElement('div'); ldr.className = 'img-loader'; ldr.id = 'img-ldr'; const sp = document.createElement('div'); sp.className = 'spinner'; ldr.appendChild(sp);
+          // Построить содержимое безопасно
+          while (back.firstChild) back.removeChild(back.firstChild);
+          const imgWrap = document.createElement('div'); imgWrap.className = 'card-img-wrap';
+          const placeholder = document.createElement('div'); placeholder.className = 'card-img-placeholder'; placeholder.id = 'card-ph'; placeholder.textContent = this.state.chosenChar.emoji || '';
+          const loader = document.createElement('div'); loader.className = 'img-loader'; const spinner = document.createElement('div'); spinner.className = 'spinner'; loader.appendChild(spinner);
           const imgEl = document.createElement('img'); imgEl.className = 'card-img loading'; imgEl.id = 'card-photo'; imgEl.alt = charName;
           const overlay = document.createElement('div'); overlay.className = 'card-img-overlay';
-          wrap.appendChild(ph); wrap.appendChild(ldr); wrap.appendChild(imgEl); wrap.appendChild(overlay);
+          imgWrap.appendChild(placeholder); imgWrap.appendChild(loader); imgWrap.appendChild(imgEl); imgWrap.appendChild(overlay);
 
-          const info = document.createElement('div'); info.className = 'card-info';
+          const infoDiv = document.createElement('div'); infoDiv.className = 'card-info';
           const infoBtn = document.createElement('div'); infoBtn.className = 'info-trigger-btn'; infoBtn.id = 'spy-info-btn'; infoBtn.textContent = 'i';
           const topLabel = document.createElement('div'); topLabel.className = 'card-top-label'; topLabel.textContent = t.characterYour;
           const nameDiv = document.createElement('div'); nameDiv.className = 'card-name'; nameDiv.textContent = charName;
           const botLabel = document.createElement('div'); botLabel.className = 'card-bot-label'; botLabel.textContent = t.characterWarn;
-          info.appendChild(infoBtn); info.appendChild(topLabel); info.appendChild(nameDiv); info.appendChild(botLabel);
-          back.appendChild(wrap); back.appendChild(info);
-          document.getElementById('spy-info-btn').onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
+          infoDiv.appendChild(infoBtn); infoDiv.appendChild(topLabel); infoDiv.appendChild(nameDiv); infoDiv.appendChild(botLabel);
+
+          back.appendChild(imgWrap); back.appendChild(infoDiv);
+          infoBtn.onclick = (e) => { e.stopPropagation(); this.openInfoModal(this.state.chosenChar, {}, e); };
           ImageLoader.bind(imgEl, this.state.chosenChar, { hidePlaceholder: true });
         }
         this.hide('deal-prompt'); this.show('flip-scene');
@@ -4317,37 +4313,46 @@
         const description = charData.desc || charData.descRU || 'Опис відсутній.';
         const enlargeImage = options.enlargeImage === true;
         document.getElementById('modal-info-title').textContent = name;
-        const bodyEl = document.getElementById('modal-info-body');
-        if (!bodyEl) return;
-        // clear
-        bodyEl.innerHTML = '';
-        if (enlargeImage) {
-          const wrap = document.createElement('div');
-          wrap.style.display = 'flex'; wrap.style.justifyContent = 'center'; wrap.style.width = '100%'; wrap.style.marginBottom = '18px';
-          const modalImg = document.createElement('img');
-          modalImg.className = 'card-img loading';
-          modalImg.id = 'modal-char-photo';
-          modalImg.alt = name;
-          modalImg.style.width = 'auto'; modalImg.style.height = 'auto';
-          modalImg.style.maxWidth = 'calc(100vw - 56px)'; modalImg.style.maxHeight = 'calc(100vh - 220px)';
-          modalImg.style.borderRadius = '20px'; modalImg.style.objectFit = 'contain'; modalImg.style.display = 'block';
-          wrap.appendChild(modalImg);
-          const p = document.createElement('p'); p.style.fontSize = '1rem'; p.style.lineHeight = '1.6'; p.style.color = 'var(--text)'; p.textContent = description;
-          bodyEl.appendChild(wrap); bodyEl.appendChild(p);
-          const url = ImageLoader.getCharImage(charData);
-          if (url) {
-            modalImg.src = url;
-            modalImg.onload = () => modalImg.classList.remove('loading');
-            modalImg.onerror = () => this.hide(modalImg);
+        const modalBody = document.getElementById('modal-info-body');
+        if (modalBody) {
+          while (modalBody.firstChild) modalBody.removeChild(modalBody.firstChild);
+          if (enlargeImage) {
+            const wrap = document.createElement('div');
+            wrap.style.display = 'flex'; wrap.style.justifyContent = 'center'; wrap.style.width = '100%'; wrap.style.marginBottom = '18px';
+            const imgEl = document.createElement('img');
+            imgEl.className = 'card-img loading';
+            imgEl.id = 'modal-char-photo';
+            imgEl.alt = name;
+            imgEl.style.width = 'auto'; imgEl.style.height = 'auto'; imgEl.style.maxWidth = 'calc(100vw - 56px)'; imgEl.style.maxHeight = 'calc(100vh - 220px)'; imgEl.style.borderRadius = '20px'; imgEl.style.objectFit = 'contain'; imgEl.style.display = 'block';
+            wrap.appendChild(imgEl);
+            const p = document.createElement('p');
+            p.style.fontSize = '1rem'; p.style.lineHeight = '1.6'; p.style.color = 'var(--text)';
+            p.textContent = description;
+            modalBody.appendChild(wrap);
+            modalBody.appendChild(p);
           } else {
-            this.hide(modalImg);
+            const emojiDiv = document.createElement('div');
+            emojiDiv.style.fontSize = '4.5rem'; emojiDiv.style.marginBottom = '14px'; emojiDiv.style.textShadow = '0 4px 12px rgba(0,0,0,0.45)';
+            emojiDiv.textContent = charData.emoji || '🔍';
+            const p = document.createElement('p');
+            p.style.fontSize = '1.05rem'; p.style.lineHeight = '1.6'; p.style.color = 'var(--text)'; p.style.fontWeight = '500';
+            p.textContent = description;
+            modalBody.appendChild(emojiDiv);
+            modalBody.appendChild(p);
           }
-        } else {
-          const emojiDiv = document.createElement('div');
-          emojiDiv.style.fontSize = '4.5rem'; emojiDiv.style.marginBottom = '14px'; emojiDiv.style.textShadow = '0 4px 12px rgba(0,0,0,0.45)';
-          emojiDiv.textContent = charData.emoji || '🔍';
-          const p = document.createElement('p'); p.style.fontSize = '1.05rem'; p.style.lineHeight = '1.6'; p.style.color = 'var(--text)'; p.style.fontWeight = '500'; p.textContent = description;
-          bodyEl.appendChild(emojiDiv); bodyEl.appendChild(p);
+        }
+        if (enlargeImage) {
+          const modalImg = document.getElementById('modal-char-photo');
+          if (modalImg) {
+            const url = ImageLoader.getCharImage(charData);
+            if (url) {
+              modalImg.src = url;
+              modalImg.onload = () => modalImg.classList.remove('loading');
+              modalImg.onerror = () => this.hide(modalImg);
+            } else {
+              this.hide(modalImg);
+            }
+          }
         }
         this.openModal('infoModal');
       }
@@ -4391,6 +4396,7 @@
       }
 
       async generateUniqueRoomCode() {
+        if (this.network && this.network._authReady) await this.network._authReady;
         const minCode = 10 ** (AppConfig.ROOM_CODE_LENGTH - 1);
         const maxCode = 10 ** AppConfig.ROOM_CODE_LENGTH;
         for (let attempt = 0; attempt < AppConfig.MAX_ROOM_CODE_ATTEMPTS; attempt++) {
@@ -4453,14 +4459,13 @@
         this.secretState.grid = this.buildDiverseSecretGrid();
 
         let code;
-        try { await this._initAuth(); code = await this.generateUniqueRoomCode(); }
+        try { code = await this.generateUniqueRoomCode(); }
         catch (error) { this.showToast('Не вдалося згенерувати код. Спробуйте ще раз.'); return; }
 
         this.secretState.roomCode = code;
         try {
           document.getElementById('btn-generate-room').disabled = true;
           const randomFirstTurn = CryptoRandomizer.secureRandomInt(2) === 0 ? 'host' : 'guest';
-          await this._initAuth();
           await this.network.createRoom(code, this.secretState.grid.map(c => ({ name: c.name, emoji: c.emoji, imgUrl: c.imgUrl || '', desc: c.desc || '' })), randomFirstTurn);
 
           this.secretState.grid.forEach(char => this.gameHistory.addCharacterToHistory(char.name));
@@ -4482,13 +4487,13 @@
 
       async joinGame() {
         const code = document.getElementById('room-code-input').value.trim().replace(/\s/g, '');
-        if (!this.validateRoomCode(code)) { this.showToast(`Введіть ${AppConfig.ROOM_CODE_LENGTH} цифр`); return; }
+        const codeRe = new RegExp(`^\\d{${AppConfig.ROOM_CODE_LENGTH}}$`);
+        if (!codeRe.test(code)) { this.showToast(`Введіть ${AppConfig.ROOM_CODE_LENGTH} цифр`); return; }
         await this.network.disconnect(this.secretState.role);
         const joinBtn = document.getElementById('btn-join-game');
         joinBtn.disabled = true;
         document.getElementById('join-status').textContent = 'Підключення...';
         try {
-          await this._initAuth();
           const roomData = await this.network.joinRoom(code);
           const grid = this.ensureArray(roomData.grid);
           if (grid.length !== AppConfig.SECRET_GRID_SIZE) throw new Error('invalid-room-data');
@@ -4637,20 +4642,40 @@
       initSecretGrid() {
         const gridEl = this.getElement('cards-grid') || document.getElementById('cards-grid');
         if (!gridEl) return;
-        gridEl.innerHTML = '';
+        // Очистить грид
+        while (gridEl.firstChild) gridEl.removeChild(gridEl.firstChild);
         this.secretState.grid.forEach((char, idx) => {
           const cell = document.createElement('div');
           cell.id = `card-cell-${idx}`;
           cell.className = 'card-cell';
           cell.dataset.idx = idx;
 
-          const imgWrap = document.createElement('div'); imgWrap.className = 'card-img-wrap';
-          const placeholder = document.createElement('div'); placeholder.className = 'card-img-placeholder'; placeholder.textContent = char.emoji || '';
-          const loader = document.createElement('div'); loader.className = 'img-loader';
-          const spinner = document.createElement('div'); spinner.className = 'spinner'; loader.appendChild(spinner);
-          const imgEl = document.createElement('img'); imgEl.className = 'card-img loading'; imgEl.alt = (char.name || '');
-          const overlay = document.createElement('div'); overlay.className = 'card-img-overlay';
-          const infoBtn = document.createElement('div'); infoBtn.className = 'info-trigger-btn'; infoBtn.title = 'Info'; infoBtn.textContent = 'i';
+          const charName = char.name || '';
+
+          const imgWrap = document.createElement('div');
+          imgWrap.className = 'card-img-wrap';
+
+          const placeholder = document.createElement('div');
+          placeholder.className = 'card-img-placeholder';
+          placeholder.textContent = char.emoji || '';
+
+          const loader = document.createElement('div');
+          loader.className = 'img-loader';
+          const spinner = document.createElement('div');
+          spinner.className = 'spinner';
+          loader.appendChild(spinner);
+
+          const imgEl = document.createElement('img');
+          imgEl.className = 'card-img loading';
+          imgEl.alt = charName;
+
+          const overlay = document.createElement('div');
+          overlay.className = 'card-img-overlay';
+
+          const infoBtn = document.createElement('div');
+          infoBtn.className = 'info-trigger-btn';
+          infoBtn.title = 'Info';
+          infoBtn.textContent = 'i';
 
           imgWrap.appendChild(placeholder);
           imgWrap.appendChild(loader);
@@ -4658,12 +4683,19 @@
           imgWrap.appendChild(overlay);
           imgWrap.appendChild(infoBtn);
 
-          const infoWrap = document.createElement('div'); infoWrap.className = 'secret-card-info';
-          const topLabel = document.createElement('div'); topLabel.className = 'card-top-label'; topLabel.textContent = char.name || '';
-          const botLabel = document.createElement('div'); botLabel.className = 'card-bot-label'; botLabel.textContent = AppText.characterWarn;
-          infoWrap.appendChild(topLabel); infoWrap.appendChild(botLabel);
+          const infoWrap = document.createElement('div');
+          infoWrap.className = 'secret-card-info';
+          const topLabel = document.createElement('div');
+          topLabel.className = 'card-top-label';
+          topLabel.textContent = charName;
+          const botLabel = document.createElement('div');
+          botLabel.className = 'card-bot-label';
+          botLabel.textContent = AppText.characterWarn;
+          infoWrap.appendChild(topLabel);
+          infoWrap.appendChild(botLabel);
 
-          cell.appendChild(imgWrap); cell.appendChild(infoWrap);
+          cell.appendChild(imgWrap);
+          cell.appendChild(infoWrap);
 
           ImageLoader.bind(imgEl, char, { hidePlaceholder: true });
           infoBtn.onclick = (e) => { e.stopPropagation(); this.openInfoModal(char, { enlargeImage: true }, e); };
