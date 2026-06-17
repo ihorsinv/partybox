@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com 'unsafe-inline'; connect-src 'self' https://partybox1303-default-rtdb.europe-west1.firebasedatabase.app https://www.googleapis.com https://www.gstatic.com; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: data: blob:; script-src 'self' https: 'unsafe-inline'; connect-src 'self' https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; base-uri 'self'; form-action 'self';">
   <title>PartyBox: Шпигун & Таємниця 🕵️</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
@@ -3672,8 +3672,8 @@
         };
         this._roomRef = roomRef;
         try {
-          await roomRef.onDisconnect().remove();
           await roomRef.set(roomData);
+          await roomRef.onDisconnect().remove();
         } catch (err) {
           await roomRef.onDisconnect().cancel().catch(() => { });
           this._roomRef = null;
