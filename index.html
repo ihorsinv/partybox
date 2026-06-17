@@ -3655,6 +3655,7 @@
 
       async _waitForAuth() {
         const user = await this._authReady;
+        console.log('Waiting for auth, got user:', user);
         if (!user || !user.uid) throw new Error('auth-failed');
         this._currentUid = user.uid;
         return user.uid;
@@ -3991,8 +3992,10 @@
         // Вона не показує ніяких модальних вікон і не блокує UI.
         return new Promise((resolve) => {
           auth.onAuthStateChanged(async (user) => {
+            console.log('Auth state changed:', user);
             if (user && user.uid) {
               this.currentUserUid = user.uid;
+              console.log('User UID:', user.uid);
               resolve(user);
               return;
             }
