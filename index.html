@@ -3728,6 +3728,7 @@
           roomRef.transaction((currentData) => {
             if (!currentData) return;
             if (currentData.status !== 'lobby' || currentData.hostOnline !== true) return;
+            if (currentData.guestOnline === true && currentData.guestUid === authUid) return currentData;
             if (currentData.guestUid && currentData.guestUid !== authUid) return;
             if (!currentData.guestUid) currentData.guestUid = authUid;
             currentData.guestOnline = true;
@@ -3741,9 +3742,14 @@
         const snapshot = result.snapshot;
         if (!snapshot || !snapshot.exists()) throw new Error('room-not-found');
         const roomData = snapshot.val();
-        if (roomData.status !== 'lobby') throw new Error('game-already-started');
-        if (roomData.hostOnline !== true) throw new Error('host-offline');
-        if (roomData.guestUid && roomData.guestUid !== authUid) throw new Error('guest-already-joined');
+        if (!result.committed) {
+          console.warn('joinRoom transaction not committed', { roomCode: code, authUid, roomData });
+          if (roomData.status !== 'lobby') throw new Error('game-already-started');
+          if (roomData.hostOnline !== true) throw new Error('host-offline');
+          if (roomData.guestUid && roomData.guestUid !== authUid) throw new Error('guest-already-joined');
+          if (roomData.guestOnline === true) throw new Error('guest-already-joined');
+          throw new Error('join-failed');
+        }
 
         this._roomRef = roomRef;
         this._roomCode = code;
