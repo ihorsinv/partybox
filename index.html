@@ -4,6 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com 'unsafe-inline'; connect-src 'self' https://partybox1303-default-rtdb.europe-west1.firebasedatabase.app https://www.googleapis.com https://www.gstatic.com; style-src 'self' https://fonts.googleapis.com 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';">
   <title>PartyBox: Шпигун & Таємниця 🕵️</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@400;700;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
@@ -3643,7 +3644,14 @@
         this._guestListenerActive = false;
       }
 
+      _getAuthUid() {
+        const user = firebase.auth().currentUser;
+        if (!user || !user.uid) throw new Error('auth-required');
+        return user.uid;
+      }
+
       async createRoom(code, grid, startingRole = 'host') {
+        const authUid = this._getAuthUid();
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
         const roomRef = firebase.database().ref('rooms/' + code);
         const snap = await roomRef.once('value');
@@ -3653,9 +3661,14 @@
           grid: grid,
           host: { selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
           guest: { selection: null, eliminated: [], pendingEliminated: [], ready: false, guess: null, requestReplay: false },
-          currentTurn: startingRole, status: 'lobby', winner: null,
+          currentTurn: startingRole,
+          status: 'lobby',
+          winner: null,
           createdAt: firebase.database.ServerValue.TIMESTAMP,
-          hostOnline: true, guestOnline: false
+          hostOnline: true,
+          guestOnline: false,
+          hostUid: authUid,
+          guestUid: null
         };
         this._roomRef = roomRef;
         try {
@@ -3670,19 +3683,39 @@
       }
 
       async joinRoom(code) {
+        const authUid = this._getAuthUid();
         if (!this._isValidRoomCode(code)) throw new Error('invalid-room-code');
         const roomRef = firebase.database().ref('rooms/' + code);
-        const snap = await roomRef.once('value');
-        if (!snap.exists()) throw new Error('room-not-found');
-        const roomData = snap.val();
-        if (roomData.status !== 'lobby') throw new Error('game-already-started');
-        if (roomData.guestOnline === true) throw new Error('guest-already-joined');
-        if (roomData.hostOnline !== true) throw new Error('host-offline');
+        const [statusSnap, hostUidSnap, guestUidSnap, guestOnlineSnap, hostOnlineSnap] = await Promise.all([
+          roomRef.child('status').once('value'),
+          roomRef.child('hostUid').once('value'),
+          roomRef.child('guestUid').once('value'),
+          roomRef.child('guestOnline').once('value'),
+          roomRef.child('hostOnline').once('value')
+        ]);
+        if (!statusSnap.exists()) throw new Error('room-not-found');
+        const status = statusSnap.val();
+        const hostUid = hostUidSnap.exists() ? hostUidSnap.val() : null;
+        const guestUid = guestUidSnap.exists() ? guestUidSnap.val() : null;
+        const guestOnline = guestOnlineSnap.exists() ? guestOnlineSnap.val() : false;
+        const hostOnline = hostOnlineSnap.exists() ? hostOnlineSnap.val() : false;
+
+        if (hostUid === authUid) throw new Error('invalid-guest');
+        if (status !== 'lobby') throw new Error('game-already-started');
+        if (!hostOnline) throw new Error('host-offline');
+        if (guestUid && guestUid !== authUid) throw new Error('guest-already-joined');
+        if (guestOnline && guestUid !== authUid) throw new Error('guest-already-joined');
+
+        if (!guestUid) {
+          await roomRef.child('guestUid').set(authUid);
+        }
 
         await roomRef.child('guestOnline').set(true);
         await roomRef.child('guestOnline').onDisconnect().set(false);
         this._roomRef = roomRef;
-        return roomData;
+
+        const finalSnap = await roomRef.once('value');
+        return finalSnap.val();
       }
 
       listenForGuest(onConnected) {
@@ -3720,11 +3753,13 @@
 
       async updateState(path, value) {
         if (!this._roomRef) return;
+        this._getAuthUid();
         await this._roomRef.child(path).set(value);
       }
 
       async updateStates(values) {
         if (!this._roomRef) return;
+        this._getAuthUid();
         await this._roomRef.update(values);
       }
 
@@ -3843,6 +3878,7 @@
         this.engine = new GameEngine();
         this.network = new NetworkManager();
         this.gameHistory = new GameHistory();
+        this.authReady = this.initFirebaseAuth();
 
         // Легаси для обратної сумісності (з часом видалити)
         // Ці об'єкти використовуються старим кодом
@@ -3877,6 +3913,25 @@
         this.initCategories('cats-container', this.state.selectedCats, this.toggleCategory.bind(this));
         this.setupCategoriesEventDelegation('cats-container', this.state.selectedCats, this.toggleCategory.bind(this));
         this.updateStaticTexts();
+      }
+
+      async initFirebaseAuth() {
+        const auth = firebase.auth();
+        auth.onAuthStateChanged((user) => {
+          if (user) {
+            this.authUid = user.uid;
+          } else {
+            this.authUid = null;
+          }
+        });
+        try {
+          await auth.signInAnonymously();
+          return true;
+        } catch (error) {
+          console.error('Firebase auth error:', error);
+          this.showToast('Не вдалося підключитися до Firebase. Оновіть сторінку.');
+          throw error;
+        }
       }
 
       secureRandomInt(max) {
@@ -4393,6 +4448,7 @@
       }
 
       async generateSecretRoomCode() {
+        await this.authReady;
         const pool = [];
         AppCategories.forEach(cat => { if (this.secretState.selectedCats.has(cat.id)) pool.push(...cat.chars); });
         if (pool.length < AppConfig.SECRET_GRID_SIZE) { this.showToast(AppText.noCategoryError); return; }
@@ -4427,6 +4483,7 @@
       }
 
       async joinGame() {
+        await this.authReady;
         const code = document.getElementById('room-code-input').value.trim().replace(/\s/g, '');
         if (code.length !== AppConfig.ROOM_CODE_LENGTH) { this.showToast(`Введіть ${AppConfig.ROOM_CODE_LENGTH} цифр`); return; }
         await this.network.disconnect(this.secretState.role);
