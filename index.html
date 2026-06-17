@@ -3747,6 +3747,16 @@
           if (roomData.status !== 'lobby') throw new Error('game-already-started');
           if (roomData.hostOnline !== true) throw new Error('host-offline');
           if (roomData.guestUid && roomData.guestUid !== authUid) throw new Error('guest-already-joined');
+          if (roomData.guestUid === authUid && roomData.guestOnline === true) {
+            this._roomRef = roomRef;
+            this._roomCode = code;
+            try {
+              await roomRef.child('guestOnline').onDisconnect().set(false);
+            } catch (err) {
+              // best-effort cleanup for disconnect tracking
+            }
+            return roomData;
+          }
           if (roomData.guestOnline === true) throw new Error('guest-already-joined');
           throw new Error('join-failed');
         }
